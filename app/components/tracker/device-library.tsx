@@ -1,0 +1,40 @@
+"use client";
+
+import type { LayoutMode, Device } from "../../lib/tracker-types";
+import { DEVICE_STATUSES, deviceCategory, deviceStatusLabel, type DeviceCategoryDefinition, type DeviceCategoryLabels } from "../../lib/constants";
+import { CoverImage, RoundedSelect } from "./common";
+
+export function normalizeDevice(item: Partial<Device> & { id: number }): Device {
+  const parsedRating = item.rating == null ? null : Number(item.rating);
+  const parsedUpdatedAt = item.updatedAt == null ? NaN : typeof item.updatedAt === "number" ? item.updatedAt : Date.parse(String(item.updatedAt));
+  return {
+    id: Number(item.id), name: item.name || "未命名设备",
+    category: typeof item.category === "string" && item.category.trim() ? item.category.trim() : "audio",
+    subCategory: item.subCategory || "",
+    status: DEVICE_STATUSES.some((status) => status.id === item.status) ? item.status! : "active",
+    price: typeof item.price === "number" && Number.isFinite(item.price) ? item.price : item.price != null ? Number(item.price) || null : null,
+    currency: item.currency || "CNY", purchaseDate: item.purchaseDate || null, receiptImage: item.receiptImage || "", coverImage: item.coverImage || "",
+    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag)).filter(Boolean) : [],
+    rating: parsedRating !== null && Number.isInteger(parsedRating) && parsedRating >= 1 && parsedRating <= 10 ? parsedRating : null,
+    review: item.review || "", updatedAt: Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : Date.now(),
+  };
+}
+
+function DeviceCard({ device, onEdit, onDelete, onReceipt, layout, categoryLabels }: { device: Device; onEdit: (device: Device) => void; onDelete: (id: number) => void; onReceipt: (device: Device) => void; layout: LayoutMode; categoryLabels: DeviceCategoryLabels }) {
+  const cat = deviceCategory(device.category);
+  const categoryLabel = categoryLabels[device.category] || cat?.label || "设备";
+  if (layout === "list") return <article className="device-list-row"><div className="device-list-category"><span>{cat?.icon || "◇"}</span></div><div className="device-list-main"><h3>{device.name}</h3><p>{device.subCategory || "未分类"}{device.tags.length ? ` · ${device.tags.slice(0, 3).join(" / ")}` : ""}</p></div><div className="device-list-price"><b>{device.price != null ? `¥${device.price.toLocaleString("zh-CN")}` : "—"}</b><small>{device.purchaseDate || "未记录日期"}</small></div><div className="device-list-rating">{device.rating != null ? <><b>{device.rating}</b><small>个人评分</small></> : <small>未评分</small>}</div><div className="device-list-actions">{device.receiptImage && <button className="receipt-button" onClick={() => onReceipt(device)} aria-label={`预览${device.name}购买凭证`}>🧾</button>}<button className="text-button" onClick={() => onEdit(device)}>编辑</button><button className="danger-text" onClick={() => { if (window.confirm(`确定移除设备「${device.name}」吗？`)) onDelete(device.id); }}>移除</button></div></article>;
+  return <article className="device-card"><div className="device-cover">{device.coverImage ? <CoverImage key={device.coverImage} className="device-cover-image" src={device.coverImage} alt={`${device.name}照片`} placeholder={device.name.slice(0, 1)} /> : <div className="device-cover-placeholder"><i>{cat?.icon || "◇"}</i><span>{categoryLabel}</span></div>}<span className={`device-status device-status-${device.status}`}>{deviceStatusLabel(device.status)}</span></div><div className="device-info"><div className="device-title"><div><h3>{device.name}</h3><p>{categoryLabel}{device.subCategory ? ` · ${device.subCategory}` : ""}</p></div><button onClick={() => onEdit(device)} aria-label="编辑设备">···</button></div><div className="device-price-row"><b>{device.price != null ? `¥${device.price.toLocaleString("zh-CN")}` : "—"}</b><small>{device.purchaseDate ? `入手 ${device.purchaseDate}` : "入手日期未记录"}</small></div>{device.tags.length > 0 && <div className="device-tags">{device.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}{device.rating != null && <div className="device-rating"><i>{"★".repeat(device.rating)}<em>{"☆".repeat(10 - device.rating)}</em></i><small>{device.rating} 分</small></div>}{device.review && <p className="device-review">{device.review}</p>}<div className="device-actions">{device.receiptImage ? <button className="receipt-button" onClick={() => onReceipt(device)} aria-label={`预览${device.name}购买凭证`}>🧾 凭证</button> : <span className="receipt-missing">未上传凭证</span>}<button className="text-button" onClick={() => onEdit(device)}>编辑 <span>↗</span></button><button className="danger-text" onClick={() => { if (window.confirm(`确定移除设备「${device.name}」吗？`)) onDelete(device.id); }}>移除</button></div></div></article>;
+}
+
+type DeviceLibraryProps = {
+  devices: Device[]; visibleDevices: Device[]; activeCount: number; totalInvestment: number; categoryTab: Device["category"] | "all"; setCategoryTab: (value: Device["category"] | "all") => void; categories: DeviceCategoryDefinition[]; categoryLabels: DeviceCategoryLabels; statusTab: Device["status"] | "all"; setStatusTab: (value: Device["status"] | "all") => void; visibleSubCategories: string[]; subCategory: string; setSubCategory: (value: string) => void; openCategoryManager: () => void; layout: LayoutMode; setLayout: (value: LayoutMode) => void; openEditor: (device: Device | null) => void; onDelete: (id: number) => void; onReceipt: (device: Device) => void;
+};
+
+export function DeviceLibrary(props: DeviceLibraryProps) {
+  return <section className="device-library"><div className="section-title"><div><h2>装备库</h2><p>{props.devices.length} 件装备 · 在役 {props.activeCount} 件 · 总投入 ¥{props.totalInvestment.toLocaleString("zh-CN")}</p></div><div className="section-title-actions"><div className="view-toggle" role="group" aria-label="装备库显示方式"><button type="button" className={props.layout === "grid" ? "active" : ""} onClick={() => props.setLayout("grid")} aria-label="网格显示" aria-pressed={props.layout === "grid"} title="网格显示">▦</button><button type="button" className={props.layout === "list" ? "active" : ""} onClick={() => props.setLayout("list")} aria-label="列表显示" aria-pressed={props.layout === "list"} title="列表显示">☷</button></div><button className="mobile-add" onClick={() => props.openEditor(null)}>＋</button></div></div>
+    <div className="device-filter-bar"><nav className="device-category-tabs" aria-label="设备大类">{[{ id: "all", label: "全部", icon: "◇" }, ...props.categories.map((item) => ({ id: item.id, label: item.label, icon: item.icon }))].map((cat) => <button key={cat.id} className={props.categoryTab === cat.id ? "active" : ""} onClick={() => { props.setCategoryTab(cat.id as Device["category"] | "all"); props.setSubCategory("all"); }}><i>{cat.icon}</i>{cat.label}<span>{cat.id === "all" ? props.devices.length : props.devices.filter((device) => device.category === cat.id).length}</span></button>)}</nav><RoundedSelect className="device-status-select" value={props.statusTab} onChange={props.setStatusTab} options={[{ value: "all", label: "全部状态" }, ...DEVICE_STATUSES.map((item) => ({ value: item.id, label: item.label }))]} ariaLabel="设备状态" /></div>
+    <div className="device-chips">{["all", ...props.visibleSubCategories].map((sub) => <button key={sub} className={props.subCategory === sub ? "active" : ""} onClick={() => props.setSubCategory(sub)}>{sub === "all" ? "全部" : sub}</button>)}<button className="subcategory-menu-button" onClick={props.openCategoryManager} aria-label="管理设备分类" title="管理设备分类">☰</button></div>
+    <div className={`device-grid ${props.layout === "list" ? "device-grid-list" : ""}`}>{props.layout === "list" && <div className="device-list-header"><span>分类</span><span>设备名称</span><span>入手价</span><span>评分</span><span>操作</span></div>}{props.visibleDevices.map((device) => <DeviceCard key={device.id} device={device} categoryLabels={props.categoryLabels} layout={props.layout} onEdit={props.openEditor} onDelete={props.onDelete} onReceipt={props.onReceipt} />)}{!props.visibleDevices.length && <div className="empty-state"><b>这里还没有装备</b><p>可以调整筛选条件，或者添加一件新设备。</p><button onClick={() => props.openEditor(null)}>添加设备</button></div>}</div>
+  </section>;
+}

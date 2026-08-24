@@ -1,0 +1,1 @@
+ALTER TABLE `admin_sessions` ADD `device_name` text DEFAULT '' NOT NULL;

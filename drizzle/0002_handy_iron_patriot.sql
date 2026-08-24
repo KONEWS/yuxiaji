@@ -1,0 +1,1 @@
+ALTER TABLE `user_state` ADD `title_mode` text DEFAULT 'cn' NOT NULL;

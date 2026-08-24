@@ -1,0 +1,120 @@
+import type { DeviceCategoryId, DeviceCategoryLabels, DeviceSubCategoryMap, MediaMetadata } from "./constants";
+import type { DEVICE_STATUSES } from "./constants";
+
+export type Status = "watching" | "wish" | "finished" | "library" | "dropped";
+export type MediaType = "anime" | "movie" | "tv" | "game" | "light_novel" | "manga" | "music" | "visual" | "video";
+export type VisualSubtype = string;
+export type MediaTab = MediaType | "all";
+export type SortMode = "updated" | "personal" | "global" | "progress" | "title";
+export type Modal = "sync" | "add" | "collection" | "collection_manager" | "settings" | "connectivity" | "calendar" | "complete" | "detail" | "device" | "device_categories" | "visual_subtypes" | "video_subtypes" | "receipt" | null;
+export type View = "acg" | "devices";
+export type LayoutMode = "grid" | "list";
+
+export type Anime = {
+  id: number;
+  title: string;
+  jp: string;
+  note: string;
+  progress: number;
+  total: number;
+  status: Status;
+  kind: "coral" | "yellow" | "girls" | "escape";
+  score?: number;
+  next?: string;
+  image?: string;
+  cover?: string;
+  description?: string;
+  thumbnail?: string;
+  subjectId?: number;
+  mediaType?: MediaType;
+  unit?: string;
+  globalScore?: number;
+  source?: string;
+  collection?: string;
+  tags: string[];
+  musicAlbum?: string;
+  musicArtist?: string;
+  lyricist?: string;
+  composer?: string;
+  animeSong?: boolean;
+  visualSubtype?: VisualSubtype;
+  videoSubtype?: string;
+  sourceUrl?: string;
+  pixivPid?: string;
+  author?: string;
+  twitterSource?: string;
+  characterTags?: string[];
+  metadata?: MediaMetadata;
+  platform?: string;
+  creator?: string;
+  duration?: string;
+  updatedAt?: number;
+};
+
+export type Device = {
+  id: number;
+  name: string;
+  category: DeviceCategoryId;
+  subCategory: string;
+  status: (typeof DEVICE_STATUSES)[number]["id"];
+  price: number | null;
+  currency: string;
+  purchaseDate: string | null;
+  receiptImage: string;
+  coverImage: string;
+  tags: string[];
+  rating: number | null;
+  review: string;
+  updatedAt: number;
+};
+
+export type DeviceForm = {
+  name: string;
+  category: Device["category"];
+  subCategory: string;
+  status: Device["status"];
+  price: string;
+  purchaseDate: string;
+  receiptImage: string;
+  coverImage: string;
+  tags: string;
+  rating: string;
+  review: string;
+};
+
+export type SearchResult = { id: number; title: string; jp: string; total: number; date: string; source: string; image?: string; originalTitle?: string; year?: number; coverImage?: string; backdropImage?: string; overview?: string; rating?: number; genres?: string[]; tmdbId?: number; metadata?: MediaMetadata };
+export type AddForm = { title: string; jp: string; total: number; status: Status; note: string; image: string; thumbnail: string; mediaType: MediaType; collection: string; tags: string; musicAlbum: string; musicArtist: string; lyricist: string; composer: string; source: string; animeSong: boolean; visualSubtype: VisualSubtype; videoSubtype: string; sourceUrl: string; pixivPid: string; author: string; twitterSource: string; characterTags: string; metadata: MediaMetadata; globalScore?: number; subjectId?: number };
+export type HealthService = { id: string; name: string; description: string; ok: boolean; latency: number; status?: "正常" | "异常" | "未配置" };
+export type HealthReport = { checkedAt: string; services: HealthService[] };
+export type ConnectionItem = { icon: string; name: string; description: string; status: string; latency: string; tone: "cyan" | "purple" | "gray" };
+export type BangumiDetail = { id: number; title: string; jp: string; summary: string; total: number; date: string; platform: string; image: string; score: number; ratingTotal: number; rank?: number; tags: string[]; metadata?: MediaMetadata; source?: string; backdropImage?: string; genres?: string[]; originalTitle?: string };
+export type SyncTarget = "bangumi" | "bangumi_pull" | "bangumi_push";
+export type WeekDay = "一" | "二" | "三" | "四" | "五" | "六" | "日";
+export type CalendarDay = WeekDay | "all";
+export type CalendarEntry = { title: string; jp: string; subjectId?: number; coverQuery: string; coverUrl?: string; meta: string; followed: boolean; source: string; day: WeekDay; long: boolean };
+export type AiringSchedule = {
+  id: number;
+  subjectId: number;
+  title: string;
+  jpTitle: string;
+  weekday: number;
+  weekdayLabel: string;
+  airTime: string;
+  timezone: string;
+  nextEpisode: number | null;
+  nextAirAt: string | null;
+  season: string;
+  year: number;
+  source: string;
+  metadata: Record<string, unknown>;
+  lastChecked: string | null;
+  isCollected: boolean;
+  mediaId: number | null;
+  mediaTitle: string | null;
+};
+
+export type DevicePreferences = {
+  deviceSubCategories: DeviceSubCategoryMap;
+  deviceCategoryLabels: DeviceCategoryLabels;
+  deviceCategoryManagerTab: DeviceCategoryId;
+};
