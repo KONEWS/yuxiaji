@@ -38,9 +38,9 @@ function parseLocalTags(value: string) {
   }
 }
 
-async function pushToBangumi(input: { userKey: string; token: string; adminId: number }) {
+async function pushToBangumi(input: { userKey: string; token: string; adminId: number; types: Set<string> }) {
   const rows = await getDb().select().from(userSubjects).where(and(eq(userSubjects.userKey, input.userKey), eq(userSubjects.source, "bangumi")));
-  const candidates = rows.filter((item) => item.subjectId && SUPPORTED_TYPES.has(item.type));
+  const candidates = rows.filter((item) => item.subjectId && SUPPORTED_TYPES.has(item.type) && input.types.has(item.type));
   const updates: Array<{ mediaId: number; subjectId: number; episodesMarked: number }> = [];
   const errors: Array<{ subjectId: number; error: string }> = [];
   for (const item of candidates) {
@@ -75,10 +75,12 @@ export async function POST(request: Request) {
     const [binding] = await getDb().select().from(bangumiAccount).where(eq(bangumiAccount.adminId, current.account.id)).limit(1);
     if (!binding) return Response.json({ error: "尚未绑定 Bangumi 账号" }, { status: 404 });
     const token = await decryptBangumiToken(binding.tokenCiphertext);
-    const body = await request.json().catch(() => ({})) as { direction?: unknown };
+    const body = await request.json().catch(() => ({})) as { direction?: unknown; types?: unknown };
     const direction = body.direction === "push" ? "push" : "pull";
+    const requestedTypes = Array.isArray(body.types) ? body.types.map((value) => String(value)).filter((value) => SUPPORTED_TYPES.has(value)) : [];
+    const selectedTypes = new Set(requestedTypes.length ? requestedTypes : Array.from(SUPPORTED_TYPES));
     if (direction === "push") {
-      const result = await pushToBangumi({ userKey: getCurrentUser(request), token, adminId: current.account.id });
+      const result = await pushToBangumi({ userKey: getCurrentUser(request), token, adminId: current.account.id, types: selectedTypes });
       return Response.json(result, { headers: { "cache-control": "no-store" } });
     }
     const collections = await getAllBangumiUserCollections(binding.username, { userToken: token }, 1000);
@@ -87,7 +89,7 @@ export async function POST(request: Request) {
     const errors: Array<{ subjectId: number; error: string }> = [];
     for (const item of collections) {
       const type = mediaTypeForBangumiId(item.subject_type);
-      if (!type || !SUPPORTED_TYPES.has(type)) continue;
+      if (!type || !SUPPORTED_TYPES.has(type) || !selectedTypes.has(type)) continue;
       try {
         const subject = await getBangumiSubject(item.subject_id, { userToken: token });
         const tags = [...subjectTags(subject), ...(item.tags || item.tag || [])].filter(Boolean).slice(0, 30);

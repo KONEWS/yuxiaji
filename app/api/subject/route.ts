@@ -1,4 +1,5 @@
-import { getMediaDetail, providerOptions, resolveMediaId, type ProviderMediaType } from "../../lib/media-provider";
+import { getMediaDetail, providerOptions, resolveMediaId, type ProviderMediaType, type ProviderLookup } from "../../lib/media-provider";
+import { normalizeVndbId, vndbNumericId } from "../../lib/vndb-api";
 
 const DETAIL_TYPES: ProviderMediaType[] = ["anime", "game", "light_novel", "manga", "music", "movie", "tv"];
 
@@ -9,13 +10,19 @@ export async function GET(request: Request) {
   const requestedType = url.searchParams.get("type") || "anime";
   const normalizedType = requestedType === "book" ? "light_novel" : requestedType;
   const mediaType = DETAIL_TYPES.includes(normalizedType as ProviderMediaType) ? normalizedType as ProviderMediaType : "anime";
+  const requestedProvider = url.searchParams.get("provider")?.trim().toLowerCase();
+  const requestedVndbId = normalizeVndbId(url.searchParams.get("vndbId"));
+  const lookup: ProviderLookup = requestedProvider === "vndb" || requestedVndbId ? { provider: "vndb", externalId: requestedVndbId || undefined } : {};
   try {
     const options = providerOptions(request);
-    const subjectId = Number.isFinite(requestedId) && requestedId > 0 ? requestedId : query.length >= 2 ? await resolveMediaId(query, mediaType, options) : undefined;
+    const subjectId = lookup.provider === "vndb"
+      ? vndbNumericId(requestedVndbId) || (query.length >= 2 ? await resolveMediaId(query, "game", options, lookup) : undefined)
+      : Number.isFinite(requestedId) && requestedId > 0 ? requestedId : query.length >= 2 ? await resolveMediaId(query, mediaType, options) : undefined;
     if (!subjectId) return Response.json({ error: "未找到对应的媒体条目" }, { status: 404 });
-    const subject = await getMediaDetail(subjectId, mediaType, options);
+    const subject = await getMediaDetail(subjectId, mediaType, options, lookup);
     return Response.json({
       id: subject.id,
+      externalId: subject.externalId,
       type: mediaType,
       title: subject.title,
       jp: subject.originalTitle,

@@ -1,8 +1,9 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { userSubjects } from "../../../../db/schema";
 import { bangumiRequestOptions, getAllBangumiUserCollections, getBangumiSubject, subjectImage, subjectScore, subjectTags } from "../../../lib/bangumi-api";
 import { getCurrentUser } from "../../../lib/current-user";
+import { normalizeMediaMetadata, normalizeSyncSettings } from "../../../lib/constants";
 
 const MEDIA_TYPES = ["anime", "game", "light_novel", "manga", "music"] as const;
 type MediaType = (typeof MEDIA_TYPES)[number];
@@ -40,11 +41,14 @@ export async function GET() {
 export async function POST(request: Request) {
   const key = getCurrentUser();
   try {
-    const body = await request.json() as { types?: unknown; syncTypes?: unknown; subjectIds?: unknown; userToken?: unknown; mode?: unknown; username?: unknown };
+    const body = await request.json() as { types?: unknown; syncTypes?: unknown; subjectIds?: unknown; userToken?: unknown; mode?: unknown; username?: unknown; syncSettings?: unknown };
     const types = normalizeTypes(body.types ?? body.syncTypes);
     if (!types.length) return Response.json({ error: "没有可同步的媒体类型" }, { status: 400 });
+    const syncFields = normalizeSyncSettings(body.syncSettings).bangumi;
     const subjectIds = normalizeSubjectIds(body.subjectIds);
-    const conditions = [eq(userSubjects.userKey, key), inArray(userSubjects.type, types)];
+    // VNDB-backed games have numeric compatibility IDs in subject_id, but
+    // they are not Bangumi records and must never be refreshed from Bangumi.
+    const conditions = [eq(userSubjects.userKey, key), inArray(userSubjects.type, types), ne(userSubjects.source, "vndb")];
     if (subjectIds) conditions.push(inArray(userSubjects.subjectId, subjectIds));
     const rows = await getDb().select().from(userSubjects).where(and(...conditions)).limit(100);
     const options = { ...bangumiRequestOptions(request), userToken: typeof body.userToken === "string" ? body.userToken : bangumiRequestOptions(request).userToken };
@@ -82,7 +86,7 @@ export async function POST(request: Request) {
           animeSong: mediaType === "music" && subjectTags(subject).some((tag) => /动画|原声|主题曲|片尾|片头/.test(tag)),
           updatedAt: new Date(),
         };
-        const [existing] = await getDb().select().from(userSubjects).where(and(eq(userSubjects.userKey, key), eq(userSubjects.subjectId, item.subject_id))).limit(1);
+        const [existing] = await getDb().select().from(userSubjects).where(and(eq(userSubjects.userKey, key), eq(userSubjects.subjectId, item.subject_id), ne(userSubjects.source, "vndb"))).limit(1);
         if (existing) {
           await getDb().update(userSubjects).set(data).where(and(eq(userSubjects.id, existing.id), eq(userSubjects.userKey, key)));
           return { mediaId: existing.id, subjectId: item.subject_id, imported: true };
@@ -95,16 +99,24 @@ export async function POST(request: Request) {
     }
     const results = await Promise.allSettled(rows.filter((row) => row.subjectId).map(async (row) => {
       const subject = await getBangumiSubject(row.subjectId!, options);
+      const currentMetadata = (() => {
+        try { return normalizeMediaMetadata(JSON.parse(row.metadata)); } catch { return normalizeMediaMetadata(); }
+      })();
+      const nextMetadata = normalizeMediaMetadata({
+        ...currentMetadata,
+        ...(syncFields.overview ? { overview: subject.summary || "", overviewOverride: false } : {}),
+      });
       const next = {
-        jp: row.jp || subject.name,
+        ...(syncFields.title ? { title: subject.name_cn || subject.name, jp: subject.name } : {}),
         total: subject.eps && subject.eps > 0 ? subject.eps : row.total,
-        image: subjectImage(subject) || row.image,
-        globalScore: subjectScore(subject) || row.globalScore,
+        ...(syncFields.cover ? { image: subjectImage(subject) || row.image } : {}),
+        ...(syncFields.score ? { globalScore: subjectScore(subject) || row.globalScore } : {}),
+        metadata: JSON.stringify(nextMetadata),
         source: "bangumi",
         updatedAt: new Date(),
       };
       await getDb().update(userSubjects).set(next).where(and(eq(userSubjects.id, row.id), eq(userSubjects.userKey, key)));
-      return { mediaId: row.id, subjectId: row.subjectId, ...next, updatedAt: next.updatedAt.getTime() };
+      return { mediaId: row.id, subjectId: row.subjectId, title: subject.name_cn || subject.name, jp: subject.name, image: subjectImage(subject) || row.image, globalScore: subjectScore(subject) || row.globalScore, overview: subject.summary || "", metadata: nextMetadata, total: next.total, updatedAt: next.updatedAt.getTime() };
     }));
     const updates: Array<Record<string, unknown>> = [];
     const errors: Array<{ mediaId: number; subjectId: number; error: string }> = [];

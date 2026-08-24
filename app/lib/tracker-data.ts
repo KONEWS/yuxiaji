@@ -21,7 +21,7 @@ export const mediaSettings: Record<MediaType, { unit: string; action: string; st
   anime: { unit: "集", action: "记录一集", step: 1, sources: "bangumi" },
   movie: { unit: "部", action: "标记看过", step: 1, sources: "TMDB / manual" },
   tv: { unit: "集", action: "记录一集", step: 1, sources: "TMDB / manual" },
-  game: { unit: "%", action: "更新 +5%", step: 5, sources: "bangumi" },
+  game: { unit: "%", action: "更新 +5%", step: 5, sources: "Bangumi / VNDB" },
   light_novel: { unit: "卷", action: "读完一卷", step: 1, sources: "bangumi" },
   manga: { unit: "话", action: "记录一话", step: 1, sources: "bangumi" },
   music: { unit: "", action: "", step: 0, sources: "manual" },

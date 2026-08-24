@@ -1,0 +1,1 @@
+ALTER TABLE `user_state` ADD `sync_settings_json` text DEFAULT '{"bangumi":{"cover":true,"title":false,"overview":false,"score":true},"vndb":{"cover":true,"title":false,"overview":false,"score":true}}' NOT NULL;

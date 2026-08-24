@@ -13,6 +13,7 @@ export async function GET(request: Request) {
     const results = await searchMedia(query, mediaType, providerOptions(request));
     return Response.json({ results: results.map((item) => ({
       id: item.id,
+      externalId: "externalId" in item ? item.externalId : undefined,
       title: item.title,
       jp: item.originalTitle,
       originalTitle: item.originalTitle,

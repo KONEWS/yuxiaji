@@ -1,9 +1,11 @@
 import type { DeviceCategoryId, DeviceStatus, MediaMetadata } from "./constants";
 import type { AiringSchedule } from "./tracker-types";
+import type { SyncSettings } from "./constants";
 
 export type TrackerStatePayload = {
   collections?: string[];
   bangumiSyncTypes?: string[];
+  syncSettings?: SyncSettings;
   mediaOrder?: string[];
   deviceSubCategories?: Record<string, string[]>;
   deviceCategoryLabels?: Record<string, string>;
@@ -199,11 +201,15 @@ export async function removeMedia(id: number) {
   return readJson<{ ok: boolean }>(response);
 }
 
-export async function fetchSubjectDetail<T>(subjectId?: number, query?: string, mediaType = "anime") {
+export type SubjectDetailOptions = { provider?: "bangumi" | "vndb" | "tmdb"; externalId?: string };
+
+export async function fetchSubjectDetail<T>(subjectId?: number, query?: string, mediaType = "anime", options: SubjectDetailOptions = {}) {
   const params = new URLSearchParams();
   if (subjectId) params.set("id", String(subjectId));
   else if (query) params.set("q", query);
   params.set("type", mediaType);
+  if (options.provider) params.set("provider", options.provider);
+  if (options.externalId) params.set("vndbId", options.externalId);
   const response = await fetch(`/api/subject?${params.toString()}`, { headers: { accept: "application/json" } });
   return readJson<T>(response);
 }
@@ -220,7 +226,7 @@ export type BangumiSyncResult = {
   mode?: "refresh" | "import";
 };
 
-export async function syncBangumi(payload: { types: string[]; userToken?: string; subjectIds?: number[]; mode?: "refresh" | "import"; username?: string }) {
+export async function syncBangumi(payload: { types: string[]; userToken?: string; subjectIds?: number[]; mode?: "refresh" | "import"; username?: string; syncSettings?: SyncSettings }) {
   const response = await fetch("/api/bangumi/sync", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },

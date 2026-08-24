@@ -5,6 +5,7 @@ export const userState = sqliteTable("user_state", {
   animeJson: text("anime_json").notNull(),
   collectionsJson: text("collections_json").notNull().default("[]"),
   bangumiSyncTypesJson: text("bangumi_sync_types_json").notNull().default("[]"),
+  syncSettingsJson: text("sync_settings_json").notNull().default('{"bangumi":{"cover":true,"title":false,"overview":false,"score":true},"vndb":{"cover":true,"title":false,"overview":false,"score":true}}'),
   mediaOrderJson: text("media_order_json").notNull().default("[]"),
   deviceSubcategoriesJson: text("device_subcategories_json").notNull().default("{}"),
   deviceCategoryLabelsJson: text("device_category_labels_json").notNull().default("{}"),
@@ -55,7 +56,7 @@ export const userSubjects = sqliteTable(
     next: text("next"),
     image: text("image"),
     globalScore: real("global_score"),
-    source: text("source").notNull().default("manual"), // bangumi | manual | local
+    source: text("source").notNull().default("manual"), // bangumi | vndb | manual | local
     collection: text("collection").notNull().default(""),
     tags: text("tags").notNull().default("[]"),
     musicAlbum: text("music_album").notNull().default(""),

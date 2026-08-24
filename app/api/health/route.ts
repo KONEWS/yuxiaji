@@ -39,6 +39,15 @@ export async function GET() {
       });
       if (!response.ok) throw new Error("Bangumi unavailable");
     }),
+    check("vndb", "VNDB 视觉小说库", "galgame 与视觉小说条目可搜索", async () => {
+      const response = await fetch("https://api.vndb.org/kana/vn", {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json", "user-agent": "TsukiAnimeTracker/1.2" },
+        body: JSON.stringify({ filters: ["id", "=", "v11"], fields: "id", results: 1 }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) throw new Error("VNDB unavailable");
+    }),
     check("anilist", "AniList 放送补充", "精确播出时间、集数与封面元数据可正常读取", async () => {
       const response = await fetch("https://graphql.anilist.co", {
         method: "POST",

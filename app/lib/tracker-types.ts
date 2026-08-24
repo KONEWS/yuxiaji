@@ -1,4 +1,4 @@
-import type { DeviceCategoryId, DeviceCategoryLabels, DeviceSubCategoryMap, MediaMetadata } from "./constants";
+import type { DeviceCategoryId, DeviceCategoryLabels, DeviceSubCategoryMap, MediaMetadata, TagPreferences } from "./constants";
 import type { DEVICE_STATUSES } from "./constants";
 
 export type Status = "watching" | "wish" | "finished" | "library" | "dropped";
@@ -9,6 +9,8 @@ export type SortMode = "updated" | "personal" | "global" | "progress" | "title";
 export type Modal = "sync" | "add" | "collection" | "collection_manager" | "settings" | "connectivity" | "calendar" | "complete" | "detail" | "device" | "device_categories" | "visual_subtypes" | "video_subtypes" | "receipt" | null;
 export type View = "acg" | "devices";
 export type LayoutMode = "grid" | "list";
+export type { TagPreferences };
+export type TagEntry = { label: string; rawTags: string[]; count: number; pinned: boolean; hidden: boolean };
 
 export type Anime = {
   id: number;
@@ -82,12 +84,12 @@ export type DeviceForm = {
   review: string;
 };
 
-export type SearchResult = { id: number; title: string; jp: string; total: number; date: string; source: string; image?: string; originalTitle?: string; year?: number; coverImage?: string; backdropImage?: string; overview?: string; rating?: number; genres?: string[]; tmdbId?: number; metadata?: MediaMetadata };
+export type SearchResult = { id: number; title: string; jp: string; total: number; date: string; source: string; externalId?: string; image?: string; originalTitle?: string; year?: number; coverImage?: string; backdropImage?: string; overview?: string; rating?: number; genres?: string[]; tmdbId?: number; metadata?: MediaMetadata };
 export type AddForm = { title: string; jp: string; total: number; status: Status; note: string; image: string; thumbnail: string; mediaType: MediaType; collection: string; tags: string; musicAlbum: string; musicArtist: string; lyricist: string; composer: string; source: string; animeSong: boolean; visualSubtype: VisualSubtype; videoSubtype: string; sourceUrl: string; pixivPid: string; author: string; twitterSource: string; characterTags: string; metadata: MediaMetadata; globalScore?: number; subjectId?: number };
 export type HealthService = { id: string; name: string; description: string; ok: boolean; latency: number; status?: "正常" | "异常" | "未配置" };
 export type HealthReport = { checkedAt: string; services: HealthService[] };
 export type ConnectionItem = { icon: string; name: string; description: string; status: string; latency: string; tone: "cyan" | "purple" | "gray" };
-export type BangumiDetail = { id: number; title: string; jp: string; summary: string; total: number; date: string; platform: string; image: string; score: number; ratingTotal: number; rank?: number; tags: string[]; metadata?: MediaMetadata; source?: string; backdropImage?: string; genres?: string[]; originalTitle?: string };
+export type BangumiDetail = { id: number; externalId?: string; title: string; jp: string; summary: string; total: number; date: string; platform: string; image: string; score: number; ratingTotal: number; rank?: number; tags: string[]; metadata?: MediaMetadata; source?: string; backdropImage?: string; genres?: string[]; originalTitle?: string };
 export type SyncTarget = "bangumi" | "bangumi_pull" | "bangumi_push";
 export type WeekDay = "一" | "二" | "三" | "四" | "五" | "六" | "日";
 export type CalendarDay = WeekDay | "all";

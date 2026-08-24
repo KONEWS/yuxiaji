@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { userState } from "../../../db/schema";
 import { getCurrentUser } from "../../lib/current-user";
-import { normalizeVideoSubtypeLabels, normalizeVisualSubtypeLabels } from "../../lib/constants";
+import { normalizeSyncSettings, normalizeVideoSubtypeLabels, normalizeVisualSubtypeLabels } from "../../lib/constants";
 
 function parseArray(value: string, fallback: unknown[] = []) {
   try {
@@ -32,6 +32,7 @@ export async function GET() {
       state: {
         collections: parseArray(row.collectionsJson),
         bangumiSyncTypes: parseArray(row.bangumiSyncTypesJson),
+        syncSettings: normalizeSyncSettings(parseObject(row.syncSettingsJson)),
         mediaOrder: parseArray(row.mediaOrderJson),
         deviceSubCategories: parseObject(row.deviceSubcategoriesJson),
         deviceCategoryLabels: parseObject(row.deviceCategoryLabelsJson),
@@ -58,6 +59,7 @@ export async function POST(request: Request) {
     const payload = await request.json() as {
       collections?: unknown[];
       bangumiSyncTypes?: unknown[];
+      syncSettings?: unknown;
       mediaOrder?: unknown[];
       deviceSubCategories?: Record<string, unknown>;
       deviceCategoryLabels?: Record<string, unknown>;
@@ -79,6 +81,7 @@ export async function POST(request: Request) {
       animeJson: "[]",
       collectionsJson: JSON.stringify(Array.isArray(payload.collections) ? payload.collections.slice(0, 100) : []),
       bangumiSyncTypesJson: JSON.stringify(Array.isArray(payload.bangumiSyncTypes) ? payload.bangumiSyncTypes.map(String).filter((type) => ["anime", "game", "light_novel", "manga", "music"].includes(type)).slice(0, 5) : []),
+      syncSettingsJson: JSON.stringify(normalizeSyncSettings(payload.syncSettings)),
       mediaOrderJson: JSON.stringify(Array.isArray(payload.mediaOrder) ? payload.mediaOrder.slice(0, 12) : []),
       deviceSubcategoriesJson: JSON.stringify(payload.deviceSubCategories && typeof payload.deviceSubCategories === "object" ? payload.deviceSubCategories : {}),
       deviceCategoryLabelsJson: JSON.stringify(payload.deviceCategoryLabels && typeof payload.deviceCategoryLabels === "object" ? payload.deviceCategoryLabels : {}),
@@ -99,6 +102,7 @@ export async function POST(request: Request) {
       set: {
         collectionsJson: next.collectionsJson,
         bangumiSyncTypesJson: next.bangumiSyncTypesJson,
+        syncSettingsJson: next.syncSettingsJson,
         mediaOrderJson: next.mediaOrderJson,
         deviceSubcategoriesJson: next.deviceSubcategoriesJson,
         deviceCategoryLabelsJson: next.deviceCategoryLabelsJson,

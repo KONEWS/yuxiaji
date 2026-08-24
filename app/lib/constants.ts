@@ -33,7 +33,11 @@ export type MediaMetadata = {
   originalTitle?: string;
   genres?: string[];
   runtime?: number;
-  provider?: "tmdb";
+  provider?: "tmdb" | "vndb";
+  vndbId?: string;
+  vndbUrl?: string;
+  platforms?: string[];
+  developers?: string[];
   videoSource?: string;
   platform?: string;
   creator?: string;
@@ -42,9 +46,69 @@ export type MediaMetadata = {
   imageHash?: string;
 };
 
+export const SYNC_PROVIDERS = ["bangumi", "vndb"] as const;
+export type SyncProvider = (typeof SYNC_PROVIDERS)[number];
+export const SYNC_FIELDS = ["cover", "title", "overview", "score"] as const;
+export type SyncField = (typeof SYNC_FIELDS)[number];
+export type SourceSyncSettings = Record<SyncField, boolean>;
+export type SyncSettings = Record<SyncProvider, SourceSyncSettings>;
+
+export type TagPreferences = {
+  pinned: string[];
+  hidden: string[];
+  aliases: Record<string, string>;
+};
+
+export function defaultTagPreferences(): TagPreferences {
+  return { pinned: [], hidden: [], aliases: {} };
+}
+
+export function normalizeTagPreferences(value?: unknown): TagPreferences {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const tags = (candidate: unknown) => Array.isArray(candidate)
+    ? Array.from(new Set(candidate.map((item) => String(item).trim().slice(0, 80)).filter(Boolean))).slice(0, 300)
+    : [];
+  const aliases: Record<string, string> = {};
+  if (source.aliases && typeof source.aliases === "object" && !Array.isArray(source.aliases)) {
+    Object.entries(source.aliases as Record<string, unknown>).slice(0, 300).forEach(([key, label]) => {
+      const raw = key.trim().slice(0, 80);
+      const display = typeof label === "string" ? label.trim().slice(0, 80) : "";
+      if (raw && display && raw !== display) aliases[raw] = display;
+    });
+  }
+  return { pinned: tags(source.pinned), hidden: tags(source.hidden), aliases };
+}
+
+export function tagDisplayName(tag: string, preferences?: TagPreferences) {
+  return preferences?.aliases[tag] || tag;
+}
+
+export function defaultSyncSettings(): SyncSettings {
+  return {
+    bangumi: { cover: true, title: false, overview: false, score: true },
+    vndb: { cover: true, title: false, overview: false, score: true },
+  };
+}
+
+export function normalizeSyncSettings(value?: unknown): SyncSettings {
+  const defaults = defaultSyncSettings();
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const normalizeProvider = (provider: SyncProvider): SourceSyncSettings => {
+    const candidate = source[provider] && typeof source[provider] === "object" && !Array.isArray(source[provider]) ? source[provider] as Record<string, unknown> : {};
+    return {
+      cover: typeof candidate.cover === "boolean" ? candidate.cover : defaults[provider].cover,
+      title: typeof candidate.title === "boolean" ? candidate.title : defaults[provider].title,
+      overview: typeof candidate.overview === "boolean" ? candidate.overview : defaults[provider].overview,
+      score: typeof candidate.score === "boolean" ? candidate.score : defaults[provider].score,
+    };
+  };
+  return { bangumi: normalizeProvider("bangumi"), vndb: normalizeProvider("vndb") };
+}
+
 export function normalizeMediaMetadata(value?: unknown): MediaMetadata {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const imageHash = typeof source.imageHash === "string" ? source.imageHash.trim().slice(0, 128) : "";
+  const vndbId = typeof source.vndbId === "string" && /^v\d+$/i.test(source.vndbId.trim()) ? source.vndbId.trim().toLowerCase() : "";
   const actors = Array.isArray(source.actors)
     ? source.actors.map((actor) => String(actor).trim()).filter(Boolean).slice(0, 30)
     : typeof source.actors === "string"
@@ -69,7 +133,11 @@ export function normalizeMediaMetadata(value?: unknown): MediaMetadata {
     originalTitle: typeof source.originalTitle === "string" ? source.originalTitle.trim().slice(0, 160) : "",
     genres: stringArray(source.genres, 30),
     runtime: numberValue(source.runtime, 1, 10000),
-    provider: source.provider === "tmdb" ? "tmdb" : undefined,
+    provider: source.provider === "tmdb" || source.provider === "vndb" ? source.provider : undefined,
+    ...(vndbId ? { vndbId } : {}),
+    vndbUrl: typeof source.vndbUrl === "string" ? source.vndbUrl.trim().slice(0, 300) : "",
+    platforms: stringArray(source.platforms, 30),
+    developers: stringArray(source.developers, 30),
     videoSource: typeof source.videoSource === "string" ? source.videoSource.trim().slice(0, 160) : "",
     platform: typeof source.platform === "string" ? source.platform.trim().slice(0, 80) : "",
     creator: typeof source.creator === "string" ? source.creator.trim().slice(0, 160) : "",
