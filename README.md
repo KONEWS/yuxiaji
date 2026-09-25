@@ -1,6 +1,6 @@
 # 月下集
 
-月下集是运行在 Cloudflare Workers 上的私人全媒体收藏系统。应用使用 Vinext/React，D1 保存媒体、设备、放送计划和管理员数据，R2 保存用户上传的图片。
+月下集是运行在 Cloudflare Workers 上的私人全媒体收藏系统。应用使用 Vinext/React，D1 保存媒体、设备、放送计划、管理员数据和结构化网盘关联，R2 保存用户上传的图片。
 
 ## 运行环境
 
@@ -24,11 +24,14 @@ npm run dev
 - `ANIMESCHEDULE_TOKEN`
 - `DEFAULT_USER_ID`
 
+网盘关联通过 `/api/media/storage`（网页会话）和 `/api/agent/storage`（OpenClaw Agent）管理。网站只保存分享地址、远端路径、验证状态和清单摘要；MEGA 账号、rclone remote 与原图仍由 OpenClaw 下载 Skill 管理，不写入网站或数据库。
+
 ## 数据与认证边界
 
 - 网页只允许一个管理员账号，使用密码、TOTP 和 HttpOnly Session Cookie。
 - `/api/agent/*` 只接受 Nova/Hikari Bearer Token，不接受网页 Session。
 - `user_subjects` 是媒体主数据；`/api/state` 只保存界面偏好，不保存或覆盖媒体。
+- `media_storage_links` 为所有媒体类型提供一对多的网盘/归档关联。
 - 放送计划可由 Bangumi、AniList、AnimeSchedule 和用户自定义来源提供。
 
 ## 数据库迁移

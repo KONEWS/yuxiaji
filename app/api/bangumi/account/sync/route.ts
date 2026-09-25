@@ -8,8 +8,18 @@ import { getCurrentUser } from "../../../../lib/current-user";
 
 const SUPPORTED_TYPES = new Set(["anime", "game", "light_novel", "manga", "music"]);
 
-function mediaTypeForBangumiId(value: unknown) {
-  return value === 2 ? "anime" : value === 4 ? "game" : value === 3 ? "music" : value === 1 ? "light_novel" : null;
+function mediaTypeForBangumiId(value: unknown, platform = "", tags: string[] = []) {
+  if (value === 1) {
+    const descriptor = `${platform} ${tags.join(" ")}`.toLowerCase();
+    return /漫画|コミック|manga|manhwa|manhua|webtoon/.test(descriptor) ? "manga" : "light_novel";
+  }
+  return value === 2 ? "anime" : value === 4 ? "game" : value === 3 ? "music" : null;
+}
+
+function canContainSelectedType(subjectType: unknown, selectedTypes: Set<string>) {
+  if (subjectType === 1) return selectedTypes.has("light_novel") || selectedTypes.has("manga");
+  const type = mediaTypeForBangumiId(subjectType);
+  return Boolean(type && selectedTypes.has(type));
 }
 
 function statusForCollectionType(value: unknown) {
@@ -23,6 +33,25 @@ function parseMetadata(value: string) {
   } catch {
     return {};
   }
+}
+
+function metadataWithBangumiSource(value: string | undefined, subjectId: number, type: string) {
+  const metadata = parseMetadata(value || "{}");
+  const currentSources = metadata.sources && typeof metadata.sources === "object" && !Array.isArray(metadata.sources)
+    ? metadata.sources as Record<string, unknown>
+    : {};
+  return {
+    ...metadata,
+    sources: { ...currentSources, bangumi: String(subjectId) },
+    ...(type === "light_novel" && metadata.bookKind !== "book" ? { bookKind: "light_novel" } : {}),
+  };
+}
+
+function linkedBangumiId(row: typeof userSubjects.$inferSelect) {
+  if (row.source === "bangumi" && row.subjectId && row.subjectId > 0) return row.subjectId;
+  const sourceId = (parseMetadata(row.metadata).sources as Record<string, unknown> | undefined)?.bangumi;
+  const numericId = Number(sourceId);
+  return Number.isInteger(numericId) && numericId > 0 ? numericId : undefined;
 }
 
 function collectionTypeForStatus(status: string): 1 | 2 | 3 | 4 | 5 {
@@ -39,12 +68,12 @@ function parseLocalTags(value: string) {
 }
 
 async function pushToBangumi(input: { userKey: string; token: string; adminId: number; types: Set<string> }) {
-  const rows = await getDb().select().from(userSubjects).where(and(eq(userSubjects.userKey, input.userKey), eq(userSubjects.source, "bangumi")));
-  const candidates = rows.filter((item) => item.subjectId && SUPPORTED_TYPES.has(item.type) && input.types.has(item.type));
+  const rows = await getDb().select().from(userSubjects).where(eq(userSubjects.userKey, input.userKey));
+  const candidates = rows.map((item) => ({ item, subjectId: linkedBangumiId(item) })).filter((candidate): candidate is { item: typeof userSubjects.$inferSelect; subjectId: number } => Boolean(candidate.subjectId && SUPPORTED_TYPES.has(candidate.item.type) && input.types.has(candidate.item.type)));
   const updates: Array<{ mediaId: number; subjectId: number; episodesMarked: number }> = [];
   const errors: Array<{ subjectId: number; error: string }> = [];
-  for (const item of candidates) {
-    const subjectId = item.subjectId!;
+  for (const candidate of candidates) {
+    const { item, subjectId } = candidate;
     try {
       const payload: BangumiCollectionUpdate = {
         type: collectionTypeForStatus(item.status),
@@ -85,39 +114,59 @@ export async function POST(request: Request) {
     }
     const collections = await getAllBangumiUserCollections(binding.username, { userToken: token }, 1000);
     const key = getCurrentUser(request);
+    const localRows = await getDb().select().from(userSubjects).where(eq(userSubjects.userKey, key));
+    const rowsByBangumiId = new Map<number, typeof userSubjects.$inferSelect>();
+    for (const row of localRows) {
+      const linkedId = linkedBangumiId(row);
+      if (!linkedId) continue;
+      const current = rowsByBangumiId.get(linkedId);
+      if (!current || (current.source !== "bangumi" && row.source === "bangumi")) rowsByBangumiId.set(linkedId, row);
+    }
     const imported: Array<{ mediaId: number | undefined; subjectId: number; action: "created" | "updated" }> = [];
     const errors: Array<{ subjectId: number; error: string }> = [];
     for (const item of collections) {
-      const type = mediaTypeForBangumiId(item.subject_type);
-      if (!type || !SUPPORTED_TYPES.has(type) || !selectedTypes.has(type)) continue;
+      if (!canContainSelectedType(item.subject_type, selectedTypes)) continue;
       try {
-        const subject = await getBangumiSubject(item.subject_id, { userToken: token });
-        const tags = [...subjectTags(subject), ...(item.tags || item.tag || [])].filter(Boolean).slice(0, 30);
+        let subject = item.subject;
+        const summaryTags = subject ? subjectTags(subject) : [];
+        const needsBookDetail = item.subject_type === 1 && !/漫画|コミック|manga|manhwa|manhua|webtoon|轻小说|小說|小说|novel/i.test(summaryTags.join(" "));
+        if (!subject || needsBookDetail) subject = await getBangumiSubject(item.subject_id, { userToken: token });
+        const subjectTagNames = subjectTags(subject);
+        const type = mediaTypeForBangumiId(item.subject_type, subject.platform, subjectTagNames);
+        if (!type || !SUPPORTED_TYPES.has(type) || !selectedTypes.has(type)) continue;
+        const tags = [...subjectTagNames, ...(item.tags || item.tag || [])].filter(Boolean).slice(0, 30);
         const now = new Date();
-        const [existing] = await getDb().select().from(userSubjects).where(and(eq(userSubjects.userKey, key), eq(userSubjects.subjectId, item.subject_id), eq(userSubjects.source, "bangumi"))).limit(1);
-        const metadata = existing ? parseMetadata(existing.metadata) : {};
+        const existing = rowsByBangumiId.get(item.subject_id);
+        const resolvedType = existing && SUPPORTED_TYPES.has(existing.type) ? existing.type : type;
+        const metadata = metadataWithBangumiSource(existing?.metadata, item.subject_id, resolvedType);
+        const remoteTitle = subject.name_cn || subject.name;
+        const remoteImage = subjectImage(subject) || null;
+        const remoteGlobalScore = subjectScore(subject) || null;
         const data = {
-          type,
+          type: resolvedType,
           subjectId: item.subject_id,
-          title: subject.name_cn || subject.name,
-          jp: subject.name || "",
-          note: item.comment || "",
-          progress: type === "music"
+          // Account import updates collection state. Public metadata refresh is
+          // a separate, user-configurable action, so existing manual fields
+          // must not be overwritten here.
+          title: existing?.title || remoteTitle,
+          jp: existing?.jp || subject.name || "",
+          note: existing?.note ?? item.comment ?? "",
+          progress: resolvedType === "music"
             ? (Number.isInteger(item.vol_status) && item.vol_status! >= 0 ? item.vol_status : 0)
             : (Number.isInteger(item.ep_status) && item.ep_status! >= 0 ? item.ep_status : 0),
-          total: type === "music" ? Math.max(1, subject.volumes || 1) : type === "game" ? 100 : Math.max(1, subject.eps || subject.volumes || 12),
+          total: existing?.total ?? (resolvedType === "music" ? Math.max(1, subject.volumes || 1) : resolvedType === "game" ? 100 : Math.max(1, subject.eps || subject.volumes || 12)),
           status: statusForCollectionType(item.type ?? item.collection_type),
           score: Number.isInteger(item.rate) && item.rate! >= 1 && item.rate! <= 10 ? item.rate : null,
-          next: null,
-          image: subjectImage(subject) || null,
-          globalScore: subjectScore(subject) || null,
-          source: "bangumi",
-          tags: JSON.stringify(tags),
-          metadata: JSON.stringify({ ...metadata, provider: "bangumi", bangumiUserId: binding.bangumiUserId, syncedAt: now.toISOString(), commentUpdatedAt: item.updated_at || null, volumes: subject.volumes || null }),
+          next: existing?.next ?? null,
+          image: existing?.image ?? remoteImage,
+          globalScore: existing?.globalScore ?? remoteGlobalScore,
+          source: existing?.source || "bangumi",
+          tags: existing?.tags || JSON.stringify(tags),
+          metadata: JSON.stringify(metadata),
           updatedAt: now,
         };
         if (existing) {
-          await getDb().update(userSubjects).set(data).where(and(eq(userSubjects.id, existing.id), eq(userSubjects.userKey, key), eq(userSubjects.source, "bangumi")));
+          await getDb().update(userSubjects).set(data).where(and(eq(userSubjects.id, existing.id), eq(userSubjects.userKey, key)));
           imported.push({ mediaId: existing.id, subjectId: item.subject_id, action: "updated" });
         } else {
           const [created] = await getDb().insert(userSubjects).values({ ...data, userKey: key }).returning({ id: userSubjects.id });
@@ -129,7 +178,7 @@ export async function POST(request: Request) {
     }
     const lastSyncAt = new Date();
     await getDb().update(bangumiAccount).set({ lastSyncAt, updatedAt: lastSyncAt }).where(eq(bangumiAccount.adminId, current.account.id));
-    return Response.json({ ok: true, provider: "bangumi", direction: "pull", requested: collections.length, synced: imported.length, failed: errors.length, updates: imported, errors, lastSyncAt: lastSyncAt.toISOString() }, { headers: { "cache-control": "no-store" } });
+    return Response.json({ ok: true, provider: "bangumi", direction: "pull", requested: imported.length + errors.length, fetched: collections.length, synced: imported.length, failed: errors.length, skipped: collections.length - imported.length - errors.length, updates: imported, errors, lastSyncAt: lastSyncAt.toISOString() }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     return Response.json({ error: "Bangumi 收藏同步失败", details: error instanceof Error ? error.message : String(error) }, { status: 502 });
   }

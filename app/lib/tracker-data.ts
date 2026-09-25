@@ -1,10 +1,5 @@
 import { MEDIA_CATEGORIES } from "./constants";
-import type { Anime, Device, MediaTab, MediaType, Status } from "./tracker-types";
-
-// Keep the export for the empty-state fallback, but never seed test media into a new local database.
-export const seedAnime: Anime[] = [];
-
-export const seedDevices: Device[] = [];
+import type { MediaTab, MediaType, Status } from "./tracker-types";
 
 export const primaryStatusMeta = [["watching", "进行中"], ["wish", "未开始"], ["finished", "已完成"]] as const;
 export const secondaryStatusMeta = [["library", "搁置"], ["dropped", "抛弃"]] as const;
@@ -22,8 +17,8 @@ export const mediaSettings: Record<MediaType, { unit: string; action: string; st
   movie: { unit: "部", action: "标记看过", step: 1, sources: "TMDB / manual" },
   tv: { unit: "集", action: "记录一集", step: 1, sources: "TMDB / manual" },
   game: { unit: "%", action: "更新 +5%", step: 5, sources: "Bangumi / VNDB" },
-  light_novel: { unit: "卷", action: "读完一卷", step: 1, sources: "bangumi" },
-  manga: { unit: "话", action: "记录一话", step: 1, sources: "bangumi" },
+  light_novel: { unit: "卷", action: "读完一卷", step: 1, sources: "Bangumi / AniList / NDL / Google Books / Open Library" },
+  manga: { unit: "话", action: "记录一话", step: 1, sources: "Bangumi / AniList / MangaDex" },
   music: { unit: "", action: "", step: 0, sources: "manual" },
   visual: { unit: "", action: "", step: 0, sources: "manual / local" },
   video: { unit: "", action: "", step: 0, sources: "manual" },

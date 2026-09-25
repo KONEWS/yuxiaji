@@ -1,6 +1,5 @@
-import type { DeviceCategoryId, DeviceStatus, MediaMetadata } from "./constants";
-import type { AiringSchedule } from "./tracker-types";
-import type { SyncSettings } from "./constants";
+import type { AiringSchedule, MediaImage } from "./tracker-types";
+import type { DeviceCategoryId, DeviceStatus, MediaMetadata, SyncSettings } from "./constants";
 
 export type TrackerStatePayload = {
   collections?: string[];
@@ -65,6 +64,8 @@ export type MediaRecordPayload = {
   cover?: string | null;
   description?: string;
   thumbnail?: string | null;
+  /** Gallery-only images. Omit to preserve existing images; pass [] to clear. */
+  images?: MediaImage[];
   globalScore?: number | null;
   source?: string;
   collection?: string;
@@ -85,6 +86,28 @@ export type MediaRecordPayload = {
   platform?: string;
   creator?: string;
   duration?: string;
+  storageLinks?: MediaStorageLink[];
+};
+
+export type StorageLinkState = "linked" | "verified" | "uncertain" | "failed";
+
+export type MediaStorageLink = {
+  id?: number;
+  mediaId?: number;
+  provider: string;
+  label?: string;
+  url?: string;
+  path?: string;
+  isPrimary?: boolean;
+  state?: StorageLinkState;
+  operationKey?: string;
+  objectCount?: number;
+  totalBytes?: number;
+  manifestSha256?: string;
+  verifiedAt?: number | null;
+  note?: string;
+  createdAt?: number;
+  updatedAt?: number;
 };
 
 export type MediaListPayload = {
@@ -201,7 +224,26 @@ export async function removeMedia(id: number) {
   return readJson<{ ok: boolean }>(response);
 }
 
-export type SubjectDetailOptions = { provider?: "bangumi" | "vndb" | "tmdb"; externalId?: string };
+export async function loadMediaStorageLinks(mediaId: number) {
+  const response = await fetch(`/api/media/storage?mediaId=${encodeURIComponent(String(mediaId))}`, { headers: { accept: "application/json" }, cache: "no-store" });
+  return readJson<{ mediaId: number; storageLinks: MediaStorageLink[] }>(response);
+}
+
+export async function saveMediaStorageLink(mediaId: number, link: MediaStorageLink) {
+  const response = await fetch("/api/media/storage", {
+    method: link.id ? "PATCH" : "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ ...link, mediaId }),
+  });
+  return readJson<{ ok: boolean; mediaId: number; storageLink: MediaStorageLink; storageLinks: MediaStorageLink[] }>(response);
+}
+
+export async function removeMediaStorageLink(mediaId: number, id: number) {
+  const response = await fetch(`/api/media/storage?mediaId=${encodeURIComponent(String(mediaId))}&id=${encodeURIComponent(String(id))}`, { method: "DELETE", headers: { accept: "application/json" } });
+  return readJson<{ ok: boolean; storageLinks: MediaStorageLink[] }>(response);
+}
+
+export type SubjectDetailOptions = { provider?: "bangumi" | "vndb" | "tmdb" | "anilist" | "mangadex" | "google_books" | "open_library" | "ndl"; externalId?: string };
 
 export async function fetchSubjectDetail<T>(subjectId?: number, query?: string, mediaType = "anime", options: SubjectDetailOptions = {}) {
   const params = new URLSearchParams();
@@ -209,7 +251,7 @@ export async function fetchSubjectDetail<T>(subjectId?: number, query?: string, 
   else if (query) params.set("q", query);
   params.set("type", mediaType);
   if (options.provider) params.set("provider", options.provider);
-  if (options.externalId) params.set("vndbId", options.externalId);
+  if (options.externalId) params.set(options.provider === "vndb" ? "vndbId" : "externalId", options.externalId);
   const response = await fetch(`/api/subject?${params.toString()}`, { headers: { accept: "application/json" } });
   return readJson<T>(response);
 }
@@ -268,6 +310,9 @@ export type DevicePayload = {
   purchaseDate?: string | null;
   receiptImage?: string;
   coverImage?: string;
+  coverPositionX?: number;
+  coverPositionY?: number;
+  coverZoom?: number;
   tags: string[];
   rating?: number | null;
   review?: string;
@@ -330,4 +375,22 @@ export async function uploadMediaImage(file: File) {
   form.append("image", new File([blob], "media-image.webp", { type: "image/webp" }));
   const response = await fetch("/api/media-assets", { method: "POST", body: form });
   return readJson<{ ok: boolean; url: string }>(response);
+}
+
+/** Attach or replace the images belonging to a gallery record. */
+export async function saveGalleryImages(subjectId: number, images: MediaImage[]) {
+  const response = await fetch("/api/gallery/images", {
+    method: "PATCH",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ subjectId, images }),
+  });
+  return readJson<{ ok: boolean; images: MediaImage[] }>(response);
+}
+
+export async function removeGalleryImage(id: number) {
+  const response = await fetch(`/api/gallery/images?id=${encodeURIComponent(String(id))}`, {
+    method: "DELETE",
+    headers: { accept: "application/json" },
+  });
+  return readJson<{ ok: boolean; subjectId: number; images: MediaImage[] }>(response);
 }

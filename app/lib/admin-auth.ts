@@ -1,4 +1,4 @@
-import { and, desc, eq, gte } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { getDb } from "../../db";
 import { adminAccount, adminAuthLogs, adminSessions } from "../../db/schema";
 
@@ -144,14 +144,33 @@ export async function createBackupCodes(count = 10) {
 
 export async function consumeBackupCode(account: AdminAccount, code: string) {
   if (!code.trim()) return false;
-  let hashes: string[] = [];
-  try { hashes = JSON.parse(account.backupCodes) as string[]; } catch { return false; }
   const hash = await hashBackupCode(code);
-  const index = hashes.indexOf(hash);
-  if (index < 0) return false;
-  hashes.splice(index, 1);
-  await getDb().update(adminAccount).set({ backupCodes: JSON.stringify(hashes), updatedAt: new Date() }).where(eq(adminAccount.id, account.id));
-  return true;
+  let encoded = account.backupCodes;
+  // Compare the old JSON value in the UPDATE predicate. This prevents two
+  // concurrent 2FA requests from consuming the same recovery code; on a
+  // conflict, reload once so a different valid code can still succeed.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let hashes: string[];
+    try {
+      const parsed = JSON.parse(encoded);
+      if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) return false;
+      hashes = parsed as string[];
+    } catch {
+      return false;
+    }
+    const index = hashes.indexOf(hash);
+    if (index < 0) return false;
+    hashes.splice(index, 1);
+    const [updated] = await getDb().update(adminAccount).set({ backupCodes: JSON.stringify(hashes), updatedAt: new Date() }).where(and(
+      eq(adminAccount.id, account.id),
+      eq(adminAccount.backupCodes, encoded),
+    )).returning({ id: adminAccount.id });
+    if (updated) return true;
+    const [fresh] = await getDb().select({ backupCodes: adminAccount.backupCodes }).from(adminAccount).where(eq(adminAccount.id, account.id)).limit(1);
+    if (!fresh) return false;
+    encoded = fresh.backupCodes;
+  }
+  return false;
 }
 
 function requestIp(request: Request) {
@@ -253,6 +272,20 @@ export async function getAdminSession(request: Request) {
 
 export async function getPendingChallenge(request: Request) { return loadSession(request, true); }
 
+export async function reserveTwoFactorAttempt(sessionId: number, maxAttempts = 5) {
+  // Pending challenges are never shown in the device list, so deviceName can
+  // hold an atomic counter without adding a deployment-blocking migration.
+  const [updated] = await getDb().update(adminSessions).set({
+    deviceName: sql<string>`CAST(COALESCE(NULLIF(${adminSessions.deviceName}, ''), '0') AS INTEGER) + 1`,
+  }).where(and(eq(adminSessions.id, sessionId), eq(adminSessions.pending, true))).returning({ attempts: adminSessions.deviceName });
+  const attempts = Number(updated?.attempts);
+  if (!updated || !Number.isInteger(attempts) || attempts > maxAttempts) {
+    await getDb().delete(adminSessions).where(and(eq(adminSessions.id, sessionId), eq(adminSessions.pending, true)));
+    return { allowed: false as const, attempts: Number.isInteger(attempts) ? attempts : maxAttempts };
+  }
+  return { allowed: true as const, attempts };
+}
+
 export async function requireAdminSession(request: Request) {
   try {
     const result = await getAdminSession(request);
@@ -277,7 +310,7 @@ export function publicAccount(account: AdminAccount | null) {
 export function sessionDurations() { return [...SESSION_DURATIONS]; }
 export { SESSION_COOKIE, CHALLENGE_COOKIE };
 
-export async function loginFailureCount(request: Request, username: string) {
+export async function loginFailureCount(username: string) {
   const since = new Date(Date.now() - 15 * 60 * 1000);
   const rows = await getDb().select({ id: adminAuthLogs.id }).from(adminAuthLogs).where(and(eq(adminAuthLogs.event, "login_failed"), eq(adminAuthLogs.username, username), gte(adminAuthLogs.createdAt, since))).limit(11);
   return rows.length;

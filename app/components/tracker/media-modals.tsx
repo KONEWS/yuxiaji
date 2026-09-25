@@ -1,30 +1,168 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, removeCustomAiring, saveCustomAiring, syncAiringSchedules } from "../../lib/client-api";
+import { fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, removeCustomAiring, removeMediaStorageLink, saveCustomAiring, saveMediaStorageLink, syncAiringSchedules, type MediaStorageLink } from "../../lib/client-api";
 import { normalizeMediaSource } from "../../lib/media-source";
-import { mediaMeta, mediaSettings, seedAnime, splitTags, week } from "../../lib/tracker-data";
+import { isLongRunningSchedule } from "../../lib/anime-airing-time";
+import { mediaMeta, mediaSettings, splitTags, week } from "../../lib/tracker-data";
 import { normalizeMediaMetadata, normalizeVideoSubtype, normalizeVisualSubtype, type SyncSettings, type VideoSubtypeLabels, type VisualSubtypeLabels } from "../../lib/constants";
-import type { AddForm, AiringSchedule, Anime, BangumiDetail, CalendarDay, CalendarEntry, MediaType, SearchResult, TagEntry, TagPreferences, WeekDay } from "../../lib/tracker-types";
-import { RoundedSelect } from "./common";
-import { CoverImage, Rating } from "./common";
+import { MAX_GALLERY_IMAGES, mediaImageUrl, normalizeMediaImages, type AddForm, type AiringSchedule, type Anime, type BangumiDetail, type CalendarDay, type CalendarEntry, type MediaImage, type MediaType, type SearchResult, type TagEntry, type TagPreferences, type WeekDay } from "../../lib/tracker-types";
+import { CoverImage, CoverPositionEditor, Rating, RoundedSelect, coverPositionStyle } from "./common";
 
 function CalendarPoster({ item }: { item: CalendarEntry }) {
   const src = item.coverUrl || highResCoverUrl(item.coverQuery);
   return <CoverImage key={src} className="calendar-poster" src={src} alt={`${item.title}封面`} placeholder={item.title.slice(0, 1)} />;
 }
 
-function CoverField({ value, label, placeholder, previewAlt, inputId, uploading, onChange, onUpload }: {
+function CoverField({ value, previewValue, label, placeholder, previewAlt, inputId, uploading, positionX, positionY, zoom, onChange, onUpload, onPositionChange }: {
   value: string;
+  previewValue?: string;
   label: string;
   placeholder: string;
   previewAlt: string;
   inputId: string;
   uploading: boolean;
+  positionX?: number;
+  positionY?: number;
+  zoom?: number;
   onChange: (value: string) => void;
   onUpload: (file?: File) => void | Promise<void>;
+  onPositionChange: (x: number, y: number, zoom?: number) => void;
 }) {
-  return <label className="wide detail-image-field">{label}<input type="url" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><div className="detail-image-upload"><span className="file-picker"><input id={inputId} className="file-picker-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; void onUpload(file); }} disabled={uploading} /><button type="button" className="file-picker-button" onClick={() => document.getElementById(inputId)?.click()} disabled={uploading}>{uploading ? "上传中…" : "上传封面"}</button><small>{value ? "已选择图片" : "未选择文件"}</small></span>{value && <span className="cover-preview"><img src={value} alt={previewAlt} referrerPolicy="no-referrer" /><b>已选择图片</b></span>}</div></label>;
+  const urlInputId = `${inputId}-url`;
+  const preview = previewValue || value;
+  return <div className="wide detail-image-field"><label htmlFor={urlInputId}>{label}</label><input id={urlInputId} type="url" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><div className="detail-image-upload"><span className="file-picker"><input id={inputId} className="file-picker-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; void onUpload(file); }} disabled={uploading} /><button type="button" className="file-picker-button" onClick={() => document.getElementById(inputId)?.click()} disabled={uploading}>{uploading ? "上传中…" : "上传封面"}</button><small>{preview ? "已选择图片" : "未选择文件"}</small></span></div>{preview && <CoverPositionEditor src={preview} x={positionX} y={positionY} zoom={zoom} alt={previewAlt} onChange={onPositionChange} />}</div>;
+}
+
+const STORAGE_PROVIDERS = [
+  ["mega", "MEGA"], ["google drive", "Google Drive"], ["onedrive", "OneDrive"],
+  ["dropbox", "Dropbox"], ["baidu", "百度网盘"], ["aliyun", "阿里云盘"],
+  ["quark", "夸克网盘"], ["115", "115"], ["webdav", "WebDAV"],
+  ["s3", "S3 / R2"], ["nas", "NAS"], ["local", "本地文件"], ["other", "其他"],
+] as const;
+
+function emptyStorageLink(): MediaStorageLink {
+  return { provider: "mega", label: "原图备份", url: "", path: "", isPrimary: false, state: "linked", note: "" };
+}
+
+function StorageLinksField({ mediaId, initialLinks, onChange }: { mediaId: number; initialLinks?: MediaStorageLink[]; onChange: (links: MediaStorageLink[]) => void }) {
+  const [links, setLinks] = useState<MediaStorageLink[]>(() => initialLinks || []);
+  // Keep an empty storage area out of the way until the user asks for it.
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<MediaStorageLink | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const update = (next: MediaStorageLink[]) => { setLinks(next); onChange(next); };
+  const submit = async () => {
+    if (!draft || busy) return;
+    setBusy(true); setError("");
+    try {
+      const result = await saveMediaStorageLink(mediaId, draft);
+      update(result.storageLinks);
+      setDraft(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "保存存储位置失败");
+    } finally { setBusy(false); }
+  };
+  const remove = async (link: MediaStorageLink) => {
+    if (!link.id || busy || !window.confirm(`删除${link.label || link.provider}存储位置吗？`)) return;
+    setBusy(true); setError("");
+    try { const result = await removeMediaStorageLink(mediaId, link.id); update(result.storageLinks); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "删除存储位置失败"); }
+    finally { setBusy(false); }
+  };
+  const displayProvider = (provider: string) => STORAGE_PROVIDERS.find(([id]) => id === provider)?.[1] || provider;
+  return <div className={`detail-storage-links ${open ? "open" : "collapsed"}`}>
+    <button type="button" className="detail-source-links-toggle" onClick={() => setOpen((current) => !current)} aria-expanded={open}><span>文件存储 {links.length ? `(${links.length})` : ""}</span><b className={open ? "up" : "down"} aria-hidden="true" /></button>
+    {open && <div className="detail-storage-body">
+      {links.map((link) => <article key={link.id || `${link.provider}-${link.path}-${link.url}`}><div><b>{displayProvider(link.provider)}</b>{link.isPrimary && <em>主存储</em>}{link.state === "verified" && <span>已验证</span>}{link.state === "uncertain" && <span className="warn">待核对</span>}<small>{[link.label, link.path].filter(Boolean).join(" · ") || "存储位置"}</small></div><div>{link.url && <a href={link.url} target="_blank" rel="noreferrer">打开</a>}<button type="button" onClick={() => setDraft({ ...link })} disabled={busy}>编辑</button><button type="button" className="danger-text" onClick={() => void remove(link)} disabled={busy}>删除</button></div></article>)}
+      {!links.length && !draft && <p>还没有关联网盘地址。</p>}
+      {draft && <section className="detail-storage-editor"><label>存储服务<RoundedSelect value={draft.provider} onChange={(provider) => setDraft({ ...draft, provider })} options={STORAGE_PROVIDERS.map(([value, label]) => ({ value, label }))} ariaLabel="存储服务" /></label><label>用途<input value={draft.label || ""} onChange={(event) => setDraft({ ...draft, label: event.target.value })} placeholder="例如：原图备份" /></label><label className="wide">网盘链接<input type="url" value={draft.url || ""} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://..." /></label><label className="wide">网盘路径<input value={draft.path || ""} onChange={(event) => setDraft({ ...draft, path: event.target.value })} placeholder="例如：Yuexiaji/originals/pixiv/123456" /></label><label className="check-field wide"><input type="checkbox" checked={Boolean(draft.isPrimary)} onChange={(event) => setDraft({ ...draft, isPrimary: event.target.checked })} />设为主存储</label><div className="detail-storage-editor-actions"><button type="button" onClick={() => setDraft(null)} disabled={busy}>取消</button><button type="button" className="primary-button" onClick={() => void submit()} disabled={busy || (!draft.url?.trim() && !draft.path?.trim())}>{busy ? "保存中…" : "保存"}</button></div></section>}
+      {!draft && <button type="button" className="detail-storage-add" onClick={() => setDraft(emptyStorageLink())}>＋ 添加存储位置</button>}
+      {error && <p className="detail-save-error" role="alert">{error}</p>}
+    </div>}
+  </div>;
+}
+
+function GalleryImagesField({ images, inputId, uploading, positionX, positionY, zoom, onChange, onPositionChange, uploadImage }: {
+  images: MediaImage[];
+  inputId: string;
+  uploading: boolean;
+  positionX?: number;
+  positionY?: number;
+  zoom?: number;
+  onChange: (images: MediaImage[]) => void;
+  onPositionChange: (x: number, y: number, zoom?: number) => void;
+  uploadImage: (file?: File) => Promise<string | null>;
+}) {
+  const [urlDraft, setUrlDraft] = useState("");
+  const [batchUploading, setBatchUploading] = useState(false);
+  const normalized = normalizeMediaImages(images);
+  const coverSrc = mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]);
+  const busy = uploading || batchUploading;
+  const commit = (next: MediaImage[]) => onChange(normalizeMediaImages(next.map((image, index) => ({ ...image, sortOrder: index }))));
+  const appendUrls = (urls: string[]) => {
+    const available = Math.max(0, MAX_GALLERY_IMAGES - normalized.length);
+    const next = [...normalized, ...urls.filter(Boolean).slice(0, available).map((url, index) => ({ url, thumbnail: url, sortOrder: normalized.length + index, isCover: normalized.length === 0 && index === 0 }))];
+    commit(next);
+  };
+  const addUrl = () => {
+    const url = urlDraft.trim();
+    if (!url) return;
+    appendUrls([url]);
+    setUrlDraft("");
+  };
+  const uploadFiles = async (files: File[]) => {
+    setBatchUploading(true);
+    const urls: string[] = [];
+    try {
+      for (const file of files.slice(0, Math.max(0, MAX_GALLERY_IMAGES - normalized.length))) {
+        const url = await uploadImage(file);
+        if (url) urls.push(url);
+      }
+      if (urls.length) appendUrls(urls);
+    } finally {
+      setBatchUploading(false);
+    }
+  };
+  const setCover = (target: number) => commit(normalized.map((image, index) => ({ ...image, isCover: index === target })));
+  const remove = (target: number) => commit(normalized.filter((_, index) => index !== target));
+  const move = (from: number, offset: number) => {
+    const to = from + offset;
+    if (to < 0 || to >= normalized.length) return;
+    const next = normalized.map((image) => ({ ...image }));
+    [next[from], next[to]] = [next[to], next[from]];
+    commit(next);
+  };
+  return <section className="wide gallery-images-field" aria-labelledby={`${inputId}-label`}>
+    <div className="gallery-images-heading"><div><b id={`${inputId}-label`}>画廊图片</b><small>仅保存压缩缩略图，最多 {MAX_GALLERY_IMAGES} 张</small></div><span>{normalized.length} 张</span></div>
+    <span className="file-picker gallery-file-picker"><input id={inputId} className="file-picker-input" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void uploadFiles(files); }} disabled={busy || normalized.length >= MAX_GALLERY_IMAGES} /><button type="button" className="file-picker-button" onClick={() => document.getElementById(inputId)?.click()} disabled={busy || normalized.length >= MAX_GALLERY_IMAGES}>{busy ? "上传中…" : "选择多张图片"}</button><small>{normalized.length >= MAX_GALLERY_IMAGES ? "已达到图片数量上限" : normalized.length ? `已加入 ${normalized.length} 张，可继续添加` : "可一次选择多张 JPG、PNG 或 WebP"}</small></span>
+    {normalized.length > 0 ? <div className="gallery-image-editor">{normalized.map((image, index) => { const src = mediaImageUrl(image); return <article className={image.isCover ? "cover" : ""} key={`${image.id || "new"}:${src}`}><div className="gallery-image-preview"><img src={src} alt={`画廊图片 ${index + 1}`} referrerPolicy="no-referrer" />{image.isCover && <span>封面</span>}</div><div className="gallery-image-controls"><button type="button" onClick={() => move(index, -1)} disabled={index === 0} aria-label={`将第 ${index + 1} 张前移`} title="前移">←</button><button type="button" onClick={() => move(index, 1)} disabled={index === normalized.length - 1} aria-label={`将第 ${index + 1} 张后移`} title="后移">→</button><button type="button" className="set-cover" onClick={() => setCover(index)} disabled={Boolean(image.isCover)}>{image.isCover ? "主图" : "设为主图"}</button><button type="button" className="remove" onClick={() => remove(index)} aria-label={`移除第 ${index + 1} 张图片`}>删除</button></div></article>; })}</div> : <p className="gallery-images-empty">还没有图片。上传多张图片后，第一张会作为条目封面。</p>}
+    {coverSrc && <CoverPositionEditor src={coverSrc} x={positionX} y={positionY} zoom={zoom} contain alt="画廊主图位置预览" onChange={onPositionChange} />}
+    <div className="gallery-image-add-row"><input type="url" value={urlDraft} onChange={(event) => setUrlDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addUrl(); } }} placeholder="粘贴一张图片地址" aria-label="画廊图片地址" disabled={busy || normalized.length >= MAX_GALLERY_IMAGES} /><button type="button" onClick={addUrl} disabled={busy || !urlDraft.trim() || normalized.length >= MAX_GALLERY_IMAGES}>添加地址</button></div>
+  </section>;
+}
+
+function providerLabel(source: string) {
+  return ({ bangumi: "Bangumi", anilist: "AniList", mangadex: "MangaDex", google_books: "Google Books", open_library: "Open Library", ndl: "NDL", vndb: "VNDB", tmdb: "TMDB" } as Record<string, string>)[source] || source;
+}
+
+const DETAIL_SOURCE_PROVIDERS = ["anilist", "mangadex", "ndl", "google_books", "open_library"] as const;
+type DetailSourceProvider = (typeof DETAIL_SOURCE_PROVIDERS)[number];
+const DETAIL_SOURCE_LABELS: Record<DetailSourceProvider, string> = {
+  anilist: "AniList",
+  mangadex: "MangaDex",
+  ndl: "NDL",
+  google_books: "Google Books",
+  open_library: "Open Library",
+};
+
+function primarySupplementalProvider(item: Pick<Anime, "source" | "subjectId" | "metadata">): DetailSourceProvider | undefined {
+  const explicit = DETAIL_SOURCE_PROVIDERS.find((provider) => item.source === provider && item.metadata?.sources?.[provider]);
+  if (explicit) return explicit;
+  const hasPrimarySource = item.source === "bangumi" && Boolean(item.subjectId)
+    || item.source === "vndb" && Boolean(item.metadata?.vndbId || item.subjectId);
+  return hasPrimarySource ? undefined : DETAIL_SOURCE_PROVIDERS.find((provider) => item.metadata?.sources?.[provider]);
 }
 
 function AddModal({ query, setQuery, search, searching, results, choose, form, setForm, collections, close, submit, uploadImage, thumbnailUploading, visualSubtypeLabels, openVisualSubtypeManager, videoSubtypeLabels, openVideoSubtypeManager }: {
@@ -41,29 +179,30 @@ function AddModal({ query, setQuery, search, searching, results, choose, form, s
   const isFilm = form.mediaType === "movie" || form.mediaType === "tv";
   return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal-card add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
     <div className="modal-title"><div><p>添加到月下集</p><h2 id="add-title">新的收藏</h2></div><button onClick={close} aria-label="关闭">×</button></div>
-    <div className="media-type-picker">{mediaMeta.filter(([id]) => id !== "all").map(([id, label, icon]) => <button key={id} className={form.mediaType === id ? "active" : ""} onClick={() => { const nextType = id as MediaType; const nextFilm = nextType === "movie" || nextType === "tv"; setForm({ ...form, mediaType: nextType, total: nextType === "game" ? 100 : nextType === "movie" || nextType === "music" || nextType === "video" ? 1 : form.total === 100 ? 12 : form.total, subjectId: undefined, image: "", thumbnail: nextType === "visual" || nextType === "video" ? "" : form.thumbnail, globalScore: nextFilm ? form.globalScore : undefined, metadata: nextFilm || nextType === "video" ? form.metadata : normalizeMediaMetadata() }); setQuery(""); }}><i>{icon}</i>{label}</button>)}</div>
+    <div className="media-type-picker">{mediaMeta.filter(([id]) => id !== "all").map(([id, label, icon]) => <button key={id} className={form.mediaType === id ? "active" : ""} onClick={() => { const nextType = id as MediaType; const nextFilm = nextType === "movie" || nextType === "tv"; setForm({ ...form, mediaType: nextType, total: nextType === "game" ? 100 : nextType === "movie" || nextType === "music" || nextType === "video" ? 1 : form.total === 100 ? 12 : form.total, subjectId: undefined, image: "", thumbnail: "", images: [], globalScore: nextFilm ? form.globalScore : undefined, metadata: nextFilm || nextType === "video" ? form.metadata : normalizeMediaMetadata() }); setQuery(""); }}><i>{icon}</i>{label}</button>)}</div>
     <div className="source-suggestion"><span>推荐数据源</span><b>{setting.sources}</b></div>
-    {canSearchRemote && <><label>搜索 {isFilm ? "TMDB" : form.mediaType === "game" ? "Bangumi + VNDB" : "Bangumi"} 全库</label>
+    {canSearchRemote && <><label>搜索 {isFilm ? "TMDB" : form.mediaType === "game" ? "Bangumi + VNDB" : form.mediaType === "manga" ? "Bangumi + AniList + MangaDex" : form.mediaType === "light_novel" ? "Bangumi + AniList + NDL + 图书目录" : "Bangumi"} 全库</label>
     <div className="add-search"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); search(); } }} placeholder={isFilm ? "输入片名或关键词" : form.mediaType === "game" ? "输入 Bangumi ID、VNDB ID、作品名或关键词" : "输入 Bangumi ID、作品名或关键词"} /><button type="button" onClick={search}>搜索</button></div>
-      <p className="search-help">{isFilm ? "电影和电视剧通过 TMDB 获取海报、简介、评分与演职员信息。" : form.mediaType === "game" ? "游戏由 Bangumi 提供常规条目，VNDB 补充视觉小说与 galgame；输入 v123 可直达 VNDB。" : "输入纯数字 Bangumi ID（例如 123456）可直接获取详情；也支持作品名搜索。"}</p></>}
+    <p className="search-help">{isFilm ? "电影和电视剧通过 TMDB 获取海报、简介、评分与演职员信息。" : form.mediaType === "game" ? "游戏由 Bangumi 提供常规条目，VNDB 补充视觉小说与 galgame；输入 v123 可直达 VNDB。" : form.mediaType === "manga" ? "漫画同时查询 Bangumi、AniList 与 MangaDex，选择结果后会保存对应来源 ID。" : form.mediaType === "light_novel" ? "书籍同时查询 Bangumi、AniList、NDL、Google Books 与 Open Library；可选择轻小说或普通书籍。" : "输入纯数字 Bangumi ID（例如 123456）可直接获取详情；也支持作品名搜索。"}</p></>}
      {isFilm && <p className="search-help">影视条目由月下集手动记录，以下信息会保存在扩展元数据中。</p>}
     {isVisual && <p className="search-help">画廊只保存缩略图和元数据，不保存原图；原始图片最大 20 MB，浏览器会压缩为不超过 5 MB 的缩略图。</p>}
     {isVideo && <p className="search-help">视频只保存标题、图片地址和元数据，不上传视频文件、不提供在线播放。</p>}
-    {(searching || results.length > 0) && <div className="lookup-results">{searching ? <p>搜索中…</p> : results.slice(0, 8).map((result) => <button className="search-result" key={`${result.source}:${result.externalId || result.id}`} onClick={() => { void choose(result); }}>{result.image ? <img src={result.image} alt="" referrerPolicy="no-referrer" /> : <i>无图</i>}<span><b>{result.title}</b><small>{result.source === "vndb" ? "VNDB" : result.source === "bangumi" ? "Bangumi" : result.source}{result.jp ? ` · ${result.jp}` : ""}{result.date ? ` · ${result.date.slice(0, 4)}年` : ""}</small></span><em>选择</em></button>)}</div>}
+    {(searching || results.length > 0) && <div className="lookup-results">{searching ? <p>搜索中…</p> : results.slice(0, 12).map((result) => <button className="search-result" key={`${result.source}:${result.externalId || result.id}`} onClick={() => { void choose(result); }}>{result.image ? <img src={result.image} alt="" referrerPolicy="no-referrer" /> : <i>无图</i>}<span><b>{result.title}</b><small>{providerLabel(result.source)}{result.jp ? ` · ${result.jp}` : ""}{result.date ? ` · ${result.date.slice(0, 4)}年` : ""}</small></span><em>选择</em></button>)}</div>}
     <div className="form-divider"><span>也可以手动填写</span></div>
     <div className="form-grid">
       <label className="wide">{isMusic ? "单曲名称" : "收藏名称"}<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder={isMusic ? "例如：晴る" : "作品名称"} /></label>
       <label className="wide">原名 / 外文名<input value={form.jp} onChange={(event) => setForm({ ...form, jp: event.target.value })} placeholder="可选" /></label>
       {!isMusic && !isVisual && <label>总进度（{setting.unit}）<input type="number" min="1" max={form.mediaType === "game" ? 100 : undefined} value={form.total} onChange={(event) => setForm({ ...form, total: Number(event.target.value) })} /></label>}
-      <label>状态<RoundedSelect value={form.status} onChange={(value) => setForm({ ...form, status: value })} options={[{ value: "watching", label: "进行中" }, { value: "wish", label: "未开始 / 未开播" }, { value: "finished", label: "已完成" }, { value: "library", label: "搁置" }, { value: "dropped", label: "抛弃" }]} ariaLabel="状态" /></label>
-       <label className="wide">所属合集<RoundedSelect value={form.collection} onChange={(value) => setForm({ ...form, collection: value })} options={[{ value: "", label: "不加入合集" }, ...collections.map((name) => ({ value: name, label: name }))]} ariaLabel="所属合集" /></label>
-      {isFilm && <><label>导演<input value={form.metadata.director} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, director: event.target.value } })} /></label><label>演员<input value={form.metadata.actors.join("，")} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, actors: event.target.value.split(/[,，、\s]+/).map((actor) => actor.trim()).filter(Boolean) } })} placeholder="用逗号分隔" /></label><label>年份<input type="number" min="1800" max="3000" value={form.metadata.year || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, year: Number(event.target.value) || undefined } })} /></label><label>地区<input value={form.metadata.region} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, region: event.target.value } })} /></label><label>季数<input type="number" min="1" max="100" value={form.metadata.seasons || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, seasons: Number(event.target.value) || undefined } })} /></label><label>集数<input type="number" min="1" max="10000" value={form.metadata.episodes || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, episodes: Number(event.target.value) || undefined } })} /></label><label className="wide">标签<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="用逗号分隔，例如：科幻，悬疑，漫改" /></label></>}
+      {form.mediaType === "light_novel" && <label>书籍类型<RoundedSelect value={form.metadata.bookKind || "light_novel"} onChange={(value) => setForm({ ...form, metadata: normalizeMediaMetadata({ ...form.metadata, bookKind: value }) })} options={[{ value: "light_novel", label: "轻小说" }, { value: "book", label: "普通书籍" }]} ariaLabel="书籍类型" /></label>}
+      {!isMusic && !isVisual && !isVideo && <label>状态<RoundedSelect value={form.status} onChange={(value) => setForm({ ...form, status: value })} options={[{ value: "watching", label: "进行中" }, { value: "wish", label: "未开始 / 未开播" }, { value: "finished", label: "已完成" }, { value: "library", label: "搁置" }, { value: "dropped", label: "抛弃" }]} ariaLabel="状态" /></label>}
+       <label className="wide">所属合集<RoundedSelect value={form.collection} onChange={(value) => setForm({ ...form, collection: value })} options={[{ value: "", label: "不加入合集" }, ...collections.map((name) => ({ value: name, label: name }))]} ariaLabel="所属合集" /></label><label className="wide">标签<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="用逗号分隔，例如：热血，周更，想二刷" /></label>
+      {isFilm && <><label>导演<input value={form.metadata.director} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, director: event.target.value } })} /></label><label>演员<input value={form.metadata.actors.join("，")} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, actors: event.target.value.split(/[,，、\s]+/).map((actor) => actor.trim()).filter(Boolean) } })} placeholder="用逗号分隔" /></label><label>年份<input type="number" min="1800" max="3000" value={form.metadata.year || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, year: Number(event.target.value) || undefined } })} /></label><label>地区<input value={form.metadata.region} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, region: event.target.value } })} /></label><label>季数<input type="number" min="1" max="100" value={form.metadata.seasons || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, seasons: Number(event.target.value) || undefined } })} /></label><label>集数<input type="number" min="1" max="10000" value={form.metadata.episodes || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, episodes: Number(event.target.value) || undefined } })} /></label></>}
       {isMusic && <><label>专辑<input value={form.musicAlbum} onChange={(event) => setForm({ ...form, musicAlbum: event.target.value })} placeholder="单曲所属专辑" /></label><label>歌手<input value={form.musicArtist} onChange={(event) => setForm({ ...form, musicArtist: event.target.value })} placeholder="演唱者" /></label><label>作词<input value={form.lyricist} onChange={(event) => setForm({ ...form, lyricist: event.target.value })} placeholder="作词人" /></label><label>作曲<input value={form.composer} onChange={(event) => setForm({ ...form, composer: event.target.value })} placeholder="作曲人" /></label><label className="wide">来源信息<input value={form.source} onChange={(event) => setForm({ ...form, source: event.target.value })} placeholder="例如：个人录入、实体唱片" /></label><label className="check-field"><input type="checkbox" checked={form.animeSong} onChange={(event) => setForm({ ...form, animeSong: event.target.checked })} />动漫歌曲</label></>}
-      {isVideo && <><label>封面图片<input type="url" value={form.image} onChange={(event) => setForm({ ...form, image: event.target.value })} placeholder="粘贴封面图片地址" /></label><label>缩略图<input type="url" value={form.thumbnail} onChange={(event) => setForm({ ...form, thumbnail: event.target.value })} placeholder="粘贴缩略图地址（可选）" /></label><label>来源信息<input value={form.source} onChange={(event) => setForm({ ...form, source: event.target.value })} placeholder="例如：YouTube、个人收藏" /></label><label>来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="视频页面或原始来源链接" /></label><label>平台<input value={form.metadata.platform || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, platform: event.target.value } })} placeholder="例如：YouTube、Bilibili" /></label><label>创作者<input value={form.metadata.creator || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, creator: event.target.value } })} placeholder="作者或频道" /></label><label>时长<input value={form.metadata.duration || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, duration: event.target.value } })} placeholder="例如：03:42" /></label><label>视频子分类<div className="inline-field"><RoundedSelect value={form.videoSubtype} onChange={(value) => setForm({ ...form, videoSubtype: normalizeVideoSubtype(value) })} options={Object.entries(videoSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="视频子分类" /><button type="button" className="inline-manage-button" onClick={() => openVideoSubtypeManager("add")}>管理</button></div></label><label className="wide">标签<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="用逗号分隔，例如：MAD，角色，现场" /></label></>}
-      {isVisual ? <><CoverField value={form.thumbnail} label="缩略图地址（仅保存缩略图）" placeholder="粘贴缩略图地址，不上传原图" previewAlt="缩略图预览" inputId="add-media-cover-input" uploading={thumbnailUploading} onChange={(value) => setForm((current) => ({ ...current, thumbnail: value }))} onUpload={async (file) => { const url = await uploadImage(file); if (url) setForm((current) => ({ ...current, thumbnail: url })); }} /><label>画廊子类型<div className="inline-field"><RoundedSelect value={form.visualSubtype} onChange={(value) => setForm({ ...form, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /><button type="button" className="inline-manage-button" onClick={() => openVisualSubtypeManager("add")}>管理</button></div></label><label>作者<input value={form.author} onChange={(event) => setForm({ ...form, author: event.target.value })} placeholder="作者名" /></label><label>Pixiv PID<input value={form.pixivPid} onChange={(event) => setForm({ ...form, pixivPid: event.target.value })} placeholder="可选" /></label><label>Twitter / X 来源<input value={form.twitterSource} onChange={(event) => setForm({ ...form, twitterSource: event.target.value })} placeholder="可选链接" /></label><label className="wide">来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="Pixiv、个人站点或其他来源" /></label><label className="wide">标签<input value={form.characterTags} onChange={(event) => setForm({ ...form, characterTags: event.target.value })} placeholder="用逗号分隔，例如：星野爱，初音未来" /></label></> : !isVideo && <CoverField value={form.image} label="封面图片" placeholder="搜索选择后会自动填入，也可粘贴图片地址" previewAlt="封面预览" inputId="add-media-cover-input" uploading={thumbnailUploading} onChange={(value) => setForm((current) => ({ ...current, image: value }))} onUpload={async (file) => { const url = await uploadImage(file); if (url) setForm((current) => ({ ...current, image: url })); }} />}
+      {isVideo && <><CoverField value={form.image} label="封面图片" placeholder="粘贴封面图片地址" previewAlt="视频封面预览" inputId="add-video-cover-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} onChange={(value) => setForm((current) => ({ ...current, image: value }))} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onUpload={async (file) => { const url = await uploadImage(file); if (url) setForm((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) })); }} /><label>缩略图<input type="url" value={form.thumbnail} onChange={(event) => setForm({ ...form, thumbnail: event.target.value })} placeholder="粘贴缩略图地址（可选）" /></label><label>来源信息<input value={form.source} onChange={(event) => setForm({ ...form, source: event.target.value })} placeholder="例如：YouTube、个人收藏" /></label><label>来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="视频页面或原始来源链接" /></label><label>平台<input value={form.metadata.platform || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, platform: event.target.value } })} placeholder="例如：YouTube、Bilibili" /></label><label>创作者<input value={form.metadata.creator || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, creator: event.target.value } })} placeholder="作者或频道" /></label><label>时长<input value={form.metadata.duration || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, duration: event.target.value } })} placeholder="例如：03:42" /></label><label>视频子分类<div className="inline-field"><RoundedSelect value={form.videoSubtype} onChange={(value) => setForm({ ...form, videoSubtype: normalizeVideoSubtype(value) })} options={Object.entries(videoSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="视频子分类" /><button type="button" className="inline-manage-button" onClick={() => openVideoSubtypeManager("add")}>管理</button></div></label></>}
+      {isVisual ? <><GalleryImagesField images={normalizeMediaImages(form.images, form.thumbnail)} inputId="add-gallery-images-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} uploadImage={uploadImage} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onChange={(images) => setForm((current) => { const normalized = normalizeMediaImages(images); return { ...current, images: normalized, thumbnail: mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]) }; })} /><label>画廊子类型<div className="inline-field"><RoundedSelect value={form.visualSubtype} onChange={(value) => setForm({ ...form, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /><button type="button" className="inline-manage-button" onClick={() => openVisualSubtypeManager("add")}>管理</button></div></label><label>作者<input value={form.author} onChange={(event) => setForm({ ...form, author: event.target.value })} placeholder="作者名" /></label><label>Pixiv PID<input value={form.pixivPid} onChange={(event) => setForm({ ...form, pixivPid: event.target.value })} placeholder="可选" /></label><label>Twitter / X 来源<input value={form.twitterSource} onChange={(event) => setForm({ ...form, twitterSource: event.target.value })} placeholder="可选链接" /></label><label className="wide">来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="Pixiv、个人站点或其他来源" /></label></> : !isVideo && <CoverField value={form.image} label="封面图片" placeholder="搜索选择后会自动填入，也可粘贴图片地址" previewAlt="封面预览" inputId="add-media-cover-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} onChange={(value) => setForm((current) => ({ ...current, image: value }))} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onUpload={async (file) => { const url = await uploadImage(file); if (url) setForm((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) })); }} />}
       <label className="wide">{isVideo ? "简介" : "备注"}<textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder={isVideo ? "视频描述" : "观看理由、角色或片段…"} /></label>
     </div>
-    <div className="submit-row"><button onClick={close}>取消</button><button className="primary-button" onClick={submit}>加入月下集</button></div>
+    <div className="submit-row"><button onClick={close}>取消</button><button className="primary-button" onClick={submit} disabled={thumbnailUploading}>{thumbnailUploading ? "图片上传中…" : "加入月下集"}</button></div>
   </section></div>;
 }
 
@@ -158,8 +297,9 @@ function CollectionManagerModal({ collections, close, save }: { collections: str
   </section></div>;
 }
 
-function TagManagerModal({ entries, close, setPreferences }: { entries: TagEntry[]; close: () => void; setPreferences: React.Dispatch<React.SetStateAction<TagPreferences>> }) {
+function TagManagerModal({ entries, activeTags, setActiveTags, close, setPreferences }: { entries: TagEntry[]; activeTags: string[]; setActiveTags: React.Dispatch<React.SetStateAction<string[]>>; close: () => void; setPreferences: React.Dispatch<React.SetStateAction<TagPreferences>> }) {
   const [query, setQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [editing, setEditing] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [mergeSource, setMergeSource] = useState<string | null>(null);
@@ -194,38 +334,49 @@ function TagManagerModal({ entries, close, setPreferences }: { entries: TagEntry
     });
     setMergeSource(null);
   };
+  const toggleTag = (label: string) => setActiveTags((current) => current.includes(label) ? current.filter((tag) => tag !== label) : [...current, label]);
   return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal-card tag-manager-modal" role="dialog" aria-modal="true" aria-labelledby="tag-manager-title">
     <div className="modal-title"><div><p>收藏库</p><h2 id="tag-manager-title">全部标签</h2></div><button onClick={close} aria-label="关闭">×</button></div>
-    <div className="tag-manager-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标签或来源名称" aria-label="搜索标签" /></div>
-    <p className="manager-hint">标签只改变显示方式，不会删除媒体数据。重命名为已有标签即可合并；置顶和隐藏会自动保存。</p>
+    <div className="tag-manager-toolbar"><div className="tag-manager-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标签或来源名称" aria-label="搜索标签" /></div><div className="view-toggle" role="group" aria-label="标签显示方式"><button type="button" className={viewMode === "grid" ? "active" : ""} onClick={() => setViewMode("grid")} aria-label="标签墙显示" aria-pressed={viewMode === "grid"} title="标签墙显示">▦</button><button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")} aria-label="管理列表显示" aria-pressed={viewMode === "list"} title="管理列表显示">☷</button></div></div>
+    <p className="manager-hint">隐藏标签会同时隐藏带有该标签的作品，但不会删除媒体数据。重命名为已有标签即可合并；置顶和隐藏会自动保存。</p>
     {mergeSource && <div className="tag-merge-banner">已选择「{mergeSource}」作为合并来源，请点击另一个标签完成合并。<button onClick={() => setMergeSource(null)}>取消</button></div>}
-    <div className="tag-manager-list">{visibleEntries.length ? visibleEntries.map((entry) => <div className={`tag-manager-row ${entry.hidden ? "hidden" : ""}`} key={entry.label}><div className="tag-manager-main"><b>{entry.label}</b>{entry.rawTags.length > 1 && <small>合并 {entry.rawTags.length} 个来源标签</small>}<span>{entry.count} 个条目{entry.hidden ? " · 已隐藏" : ""}</span></div><div className="tag-manager-actions">{editing === entry.label ? <><input value={draftName} onChange={(event) => setDraftName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") saveRename(entry); if (event.key === "Escape") setEditing(null); }} autoFocus aria-label={`重命名${entry.label}`} /><button onClick={() => saveRename(entry)}>保存</button></> : <><button className={entry.pinned ? "active" : ""} onClick={() => toggleList("pinned", entry)}>{entry.pinned ? "已置顶" : "置顶"}</button><button onClick={() => toggleList("hidden", entry)}>{entry.hidden ? "显示" : "隐藏"}</button><button onClick={() => { setEditing(entry.label); setDraftName(entry.label); }}>重命名</button><button onClick={() => mergeInto(entry)}>{mergeSource && mergeSource !== entry.label ? "合并到此处" : "合并"}</button></>}</div></div>) : <p className="manager-empty">没有匹配的标签</p>}</div>
+    {viewMode === "grid" ? <div className="tag-manager-cloud">{visibleEntries.length ? visibleEntries.map((entry) => <button type="button" className={`tag-manager-cloud-item ${activeTags.includes(entry.label) ? "active" : ""} ${entry.pinned ? "pinned" : ""} ${entry.hidden ? "hidden" : ""}`} key={entry.label} title={`${entry.label} · ${entry.count} 个条目`} onClick={() => toggleTag(entry.label)} aria-pressed={activeTags.includes(entry.label)}><b>{entry.pinned && <i aria-hidden="true">★</i>}#{entry.label}</b><small>{entry.count}</small>{entry.hidden && <em>隐藏</em>}</button>) : <p className="manager-empty">没有匹配的标签</p>}</div> : <div className="tag-manager-list">{visibleEntries.length ? visibleEntries.map((entry) => <div className={`tag-manager-row ${entry.hidden ? "hidden" : ""}`} key={entry.label}><div className="tag-manager-main"><b>{entry.label}</b>{entry.rawTags.length > 1 && <small>合并 {entry.rawTags.length} 个来源标签</small>}<span>{entry.count} 个条目{entry.hidden ? " · 已隐藏" : ""}</span></div><div className="tag-manager-actions">{editing === entry.label ? <><input value={draftName} onChange={(event) => setDraftName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") saveRename(entry); if (event.key === "Escape") setEditing(null); }} autoFocus aria-label={`重命名${entry.label}`} /><button onClick={() => saveRename(entry)}>保存</button></> : <><button className={entry.pinned ? "active" : ""} onClick={() => toggleList("pinned", entry)}>{entry.pinned ? "已置顶" : "置顶"}</button><button onClick={() => toggleList("hidden", entry)}>{entry.hidden ? "显示" : "隐藏"}</button><button onClick={() => { setEditing(entry.label); setDraftName(entry.label); }}>重命名</button><button onClick={() => mergeInto(entry)}>{mergeSource && mergeSource !== entry.label ? "合并到此处" : "合并"}</button></>}</div></div>) : <p className="manager-empty">没有匹配的标签</p>}</div>}
     <div className="submit-row"><button onClick={close}>完成</button></div>
   </section></div>;
 }
 
-function DetailDrawer({ item, collections, close, save, remove, uploadImage, imageUploading, visualSubtypeLabels, videoSubtypeLabels, syncSettings }: { item?: Anime; collections: string[]; close: () => void; save: (item: Anime) => void; remove: (id: number) => void; uploadImage: (file?: File) => Promise<string | null>; imageUploading: boolean; visualSubtypeLabels?: VisualSubtypeLabels; videoSubtypeLabels?: VideoSubtypeLabels; syncSettings: SyncSettings }) {
+function DetailDrawer({ item, collections, close, save, remove, uploadImage, imageUploading, visualSubtypeLabels, videoSubtypeLabels, syncSettings }: { item: Anime; collections: string[]; close: () => void; save: (item: Anime) => void; remove: (id: number) => void; uploadImage: (file?: File) => Promise<string | null>; imageUploading: boolean; visualSubtypeLabels?: VisualSubtypeLabels; videoSubtypeLabels?: VideoSubtypeLabels; syncSettings: SyncSettings }) {
   type ExternalDetail = BangumiDetail & { overview?: string; coverImage?: string; originalTitle?: string; genres?: string[]; source?: string };
-  const [draft, setDraft] = useState<Anime>(() => item || seedAnime[0]);
-  const [tagText, setTagText] = useState(() => (item?.tags || []).join("，"));
+  const [draft, setDraft] = useState<Anime>(() => item);
+  const [tagText, setTagText] = useState(() => splitTags([...item.tags, ...(item.characterTags || [])].join("，")).join("，"));
   const [subjectIdTouched, setSubjectIdTouched] = useState(false);
   const [vndbIdTouched, setVndbIdTouched] = useState(false);
+  const [sourceIdsTouched, setSourceIdsTouched] = useState<Partial<Record<DetailSourceProvider, boolean>>>({});
+  const [sourceIdDrafts, setSourceIdDrafts] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(item.metadata?.sources || {}).filter(([provider]) => DETAIL_SOURCE_PROVIDERS.includes(provider as DetailSourceProvider))));
+  const [sourceLinksOpen, setSourceLinksOpen] = useState(false);
   const [bangumi, setBangumi] = useState<BangumiDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(() => Boolean(item && !["movie", "tv", "visual", "video"].includes(item.mediaType || "")));
+  const [detailLoading, setDetailLoading] = useState(() => Boolean(
+    !["movie", "tv", "visual", "video"].includes(item.mediaType || "")
+      && (item.subjectId || item.metadata?.vndbId || DETAIL_SOURCE_PROVIDERS.some((provider) => item.metadata?.sources?.[provider])),
+  ));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   useEffect(() => {
-    if (!item) return;
     let active = true;
     if (["movie", "tv", "visual", "video"].includes(item.mediaType || "")) return () => { active = false; };
     const initialVndbId = item.metadata?.vndbId || (item.source === "vndb" && item.subjectId ? `v${item.subjectId}` : undefined);
-    fetchSubjectDetail<BangumiDetail>(item.subjectId, item.title, item.mediaType || "anime", initialVndbId ? { provider: "vndb", externalId: initialVndbId } : {})
+    const initialProvider = primarySupplementalProvider(item);
+    const initialExternalId = initialProvider ? item.metadata?.sources?.[initialProvider] || "" : "";
+    const initialSubjectId = initialProvider || initialVndbId ? undefined : item.subjectId;
+    if (!initialSubjectId && !initialVndbId && !initialExternalId) {
+      return () => { active = false; };
+    }
+    fetchSubjectDetail<BangumiDetail>(initialSubjectId, undefined, item.mediaType || "anime", initialVndbId ? { provider: "vndb", externalId: initialVndbId } : initialProvider ? { provider: initialProvider, externalId: initialExternalId } : {})
       .then((detail) => { if (active) setBangumi(detail); })
       .catch(() => { if (active) setBangumi(null); })
       .finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
   }, [item]);
-  if (!item) return null;
   const mediaType = draft.mediaType || "anime";
   const setting = mediaSettings[mediaType];
   const isMusic = mediaType === "music";
@@ -234,32 +385,109 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
   const isMovie = mediaType === "movie";
   const isFilm = mediaType === "movie" || mediaType === "tv";
   const isVndb = draft.source === "vndb" || Boolean(draft.metadata?.vndbId);
+  const supplementalProvider = primarySupplementalProvider(draft);
   const sourceSyncSettings = syncSettings[isVndb ? "vndb" : "bangumi"];
-  const cover = draft.image || (isVideo ? draft.thumbnail || "" : mediaType === "anime" ? highResCoverUrl(draft.jp || draft.title) : "");
-  const visualCover = draft.thumbnail || "";
+  const cover = draft.image || (isVideo ? draft.thumbnail || "" : mediaType === "anime" && draft.subjectId && draft.source === "bangumi" ? highResCoverUrl(draft.jp || draft.title) : "");
+  const galleryImages = normalizeMediaImages(draft.images, draft.thumbnail || "");
+  const visualCover = mediaImageUrl(galleryImages.find((image) => image.isCover) || galleryImages[0]) || draft.thumbnail || "";
   const imageValue = isVisual ? visualCover : draft.image || "";
   const detailSubjectId = subjectIdTouched ? draft.subjectId : draft.subjectId || bangumi?.id;
   const detailVndbId = vndbIdTouched ? draft.metadata?.vndbId || "" : draft.metadata?.vndbId || bangumi?.externalId || "";
+  const detailSupplementalId = supplementalProvider ? draft.metadata?.sources?.[supplementalProvider] || bangumi?.externalId || "" : "";
+  const hasExternalMatch = isVndb ? Boolean(detailVndbId) : supplementalProvider ? Boolean(detailSupplementalId) : Boolean(detailSubjectId);
   const summaryOverride = draft.metadata?.overviewOverride === true;
   const summaryValue = summaryOverride
     ? draft.metadata?.overview || ""
-    : draft.metadata?.overview || bangumi?.summary || draft.note || "";
-  const summaryPending = detailLoading && Boolean(detailSubjectId) && !summaryOverride && !draft.metadata?.overview;
-  const setImageValue = (value: string) => setDraft((current) => isVisual ? { ...current, thumbnail: value } : { ...current, image: value });
+    : draft.metadata?.overview || bangumi?.summary || "";
+  const summaryPending = detailLoading && Boolean(detailSubjectId || detailVndbId || detailSupplementalId) && !summaryOverride && !draft.metadata?.overview;
+  const previewTags = splitTags(tagText);
+  const setImageValue = (value: string) => setDraft((current) => ({ ...current, image: value }));
+  const setCoverPosition = (coverPositionX: number, coverPositionY: number, coverZoom?: number) => setDraft((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }));
+  const setGalleryImages = (images: MediaImage[]) => setDraft((current) => {
+    const normalized = normalizeMediaImages(images);
+    return { ...current, images: normalized, thumbnail: mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]) };
+  });
+  const resetCoverPositionForNewImage = () => setDraft((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) }));
+  const detachExternalMatch = (current: Anime): Anime => {
+    const overviewIsManual = current.metadata?.overviewOverride === true;
+    const sources = { ...(current.metadata?.sources || {}) };
+    delete sources.bangumi;
+    delete sources.vndb;
+    return {
+      ...current,
+      subjectId: undefined,
+      source: "manual",
+      image: undefined,
+      globalScore: undefined,
+      next: undefined,
+      metadata: normalizeMediaMetadata({
+        ...current.metadata,
+        sources,
+        overview: overviewIsManual ? current.metadata?.overview || "" : "",
+        overviewOverride: overviewIsManual,
+        originalTitle: "",
+        genres: [],
+        provider: undefined,
+        vndbId: "",
+        vndbUrl: "",
+        platforms: [],
+        developers: [],
+      }),
+    };
+  };
   const setSubjectId = (value: string) => {
     const normalized = value.replace(/\D/g, "").slice(0, 12);
     setSubjectIdTouched(true);
-    setDraft((current) => ({ ...current, subjectId: normalized ? Number(normalized) : undefined }));
+    setBangumi(null);
+    setDetailLoading(false);
+    setDraft((current) => normalized
+      ? (() => {
+        const sources = { ...(current.metadata?.sources || {}) };
+        delete sources.vndb;
+        return { ...current, subjectId: Number(normalized), source: "bangumi", metadata: normalizeMediaMetadata({ ...current.metadata, provider: undefined, vndbId: "", vndbUrl: "", sources: { ...sources, bangumi: String(Number(normalized)) } }) };
+      })()
+      : current.subjectId || current.source === "bangumi" || current.source === "vndb" || current.metadata?.vndbId
+        ? detachExternalMatch(current)
+        : current);
   };
   const setVndbId = (value: string) => {
     const normalized = (value.trim().match(/^(?:vndb\s*[:#]?\s*)?(v\d+)$/i) || value.trim().match(/^(?:https?:\/\/)?(?:www\.)?vndb\.org\/(v\d+)$/i))?.[1]?.toLowerCase() || "";
     setVndbIdTouched(true);
-    setDraft((current) => ({ ...current, subjectId: normalized ? Number(normalized.slice(1)) : undefined, source: normalized ? "vndb" : current.source === "vndb" ? "manual" : current.source, metadata: normalizeMediaMetadata({ ...current.metadata, vndbId: normalized, vndbUrl: normalized ? `https://vndb.org/${normalized}` : "", provider: normalized ? "vndb" : undefined }) }));
+    setBangumi(null);
+    setDetailLoading(false);
+    setDraft((current) => normalized
+      ? (() => {
+        const sources = { ...(current.metadata?.sources || {}) };
+        delete sources.bangumi;
+        return { ...current, subjectId: Number(normalized.slice(1)), source: "vndb", metadata: normalizeMediaMetadata({ ...current.metadata, vndbId: normalized, vndbUrl: `https://vndb.org/${normalized}`, provider: "vndb", sources: { ...sources, vndb: normalized } }) };
+      })()
+      : current.subjectId || current.source === "bangumi" || current.source === "vndb" || current.metadata?.vndbId
+        ? detachExternalMatch(current)
+        : current);
+  };
+  const setSourceId = (provider: DetailSourceProvider, value: string) => {
+    const normalized = value.trim().slice(0, 240);
+    setSourceIdsTouched((current) => ({ ...current, [provider]: true }));
+    if (draft.source === provider) {
+      setBangumi(null);
+      setDetailLoading(false);
+    }
+    setSourceIdDrafts((current) => ({ ...current, [provider]: normalized }));
+    setDraft((current) => {
+      const sources = { ...(current.metadata?.sources || {}) };
+      if (normalized) sources[provider] = normalized;
+      else delete sources[provider];
+      if (!normalized && current.source === provider) {
+        const detached = detachExternalMatch(current);
+        return { ...detached, metadata: normalizeMediaMetadata({ ...detached.metadata, sources }) };
+      }
+      return { ...current, metadata: normalizeMediaMetadata({ ...current.metadata, sources }) };
+    });
   };
   const chooseImage = async (file?: File) => {
     if (!file) return;
     const url = await uploadImage(file);
-    if (url) setImageValue(url);
+    if (url) setDraft((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) }));
   };
   const submit = async () => {
     if (saving) return;
@@ -267,17 +495,23 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
     setSaveError("");
     try {
       let nextDraft = draft;
-      const externalIdChanged = subjectIdTouched || vndbIdTouched;
+      const changedSupplementalProvider = DETAIL_SOURCE_PROVIDERS.find((provider) => sourceIdsTouched[provider] && draft.source === provider && sourceIdDrafts[provider]);
+      const externalIdChanged = subjectIdTouched || vndbIdTouched || Boolean(changedSupplementalProvider);
       if (externalIdChanged && !isVisual && !isVideo && !isFilm) {
         const targetVndbId = isVndb ? detailVndbId : "";
-        const targetSubjectId = isVndb ? undefined : detailSubjectId;
-        if (targetVndbId || targetSubjectId) {
+        const targetSupplementalId = changedSupplementalProvider ? sourceIdDrafts[changedSupplementalProvider] || "" : "";
+        const targetSubjectId = isVndb || changedSupplementalProvider ? undefined : detailSubjectId;
+        if (targetVndbId || targetSupplementalId || targetSubjectId) {
           setDetailLoading(true);
           const detail = await fetchSubjectDetail<ExternalDetail>(
             isVndb ? Number(targetVndbId.slice(1)) : targetSubjectId,
             undefined,
             mediaType,
-            isVndb ? { provider: "vndb", externalId: targetVndbId } : {},
+            isVndb
+              ? { provider: "vndb", externalId: targetVndbId }
+              : changedSupplementalProvider
+                ? { provider: changedSupplementalProvider, externalId: targetSupplementalId }
+                : {},
           );
           const detailOverview = detail.overview || detail.summary || "";
           const detailTitle = sourceSyncSettings.title ? detail.title || draft.title : draft.title;
@@ -286,6 +520,7 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
           const metadata = normalizeMediaMetadata({
             ...draft.metadata,
             ...(detail.metadata || {}),
+            sources: { ...(draft.metadata?.sources || {}), ...(detail.metadata?.sources || {}), ...(changedSupplementalProvider ? { [changedSupplementalProvider]: detail.externalId || targetSupplementalId } : {}) },
             overview: sourceSyncSettings.overview ? detailOverview : draft.metadata?.overview || "",
             overviewOverride: sourceSyncSettings.overview ? false : draft.metadata?.overviewOverride,
             originalTitle: detailOriginalTitle,
@@ -307,8 +542,8 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
             image: detailImage,
             total: detail.total || draft.total,
             globalScore: sourceSyncSettings.score ? detail.score || 0 : draft.globalScore,
-            subjectId: isVndb ? Number((detail.externalId || targetVndbId).slice(1)) : targetSubjectId,
-            source: isVndb ? "vndb" : "bangumi",
+            subjectId: isVndb ? Number((detail.externalId || targetVndbId).slice(1)) : changedSupplementalProvider ? undefined : targetSubjectId,
+            source: isVndb ? "vndb" : changedSupplementalProvider || "bangumi",
             metadata,
           };
           setDraft(nextDraft);
@@ -325,8 +560,8 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
       const finalSubjectId = nextDraft.subjectId;
       const total = finalIsMusic || finalIsVisual || finalIsFilm || finalIsVideo ? 1 : Math.max(1, Number(nextDraft.total) || 1);
       const progress = finalIsMusic || finalIsVisual || finalIsFilm || finalIsVideo ? 0 : Math.min(Math.max(0, Number(nextDraft.progress) || 0), total);
-      const metadata = normalizeMediaMetadata({ ...nextDraft.metadata, ...(finalIsVndb && detailVndbId ? { vndbId: detailVndbId, vndbUrl: `https://vndb.org/${detailVndbId}`, provider: "vndb" } : {}), videoSource: finalIsVideo ? nextDraft.metadata?.videoSource || nextDraft.source || "" : nextDraft.metadata?.videoSource });
-      save({ ...nextDraft, image: finalIsVisual ? undefined : nextDraft.image, subjectId: finalIsVisual || finalIsFilm || finalIsVideo ? undefined : finalIsVndb ? (detailVndbId ? Number(detailVndbId.slice(1)) : undefined) : finalSubjectId, source: finalIsVideo ? "manual" : normalizeMediaSource(nextDraft.source, finalIsVisual || finalIsFilm ? "manual" : finalIsVndb ? "vndb" : finalSubjectId ? "bangumi" : "manual"), videoSubtype: finalIsVideo ? normalizeVideoSubtype(nextDraft.videoSubtype) : "other", metadata, tags: splitTags(tagText), characterTags: nextDraft.characterTags || [], progress, status: nextDraft.status === "wish" && progress > 0 ? "watching" : nextDraft.status, total, updatedAt: Date.now() });
+      const metadata = normalizeMediaMetadata({ ...nextDraft.metadata, sources: { ...(nextDraft.metadata?.sources || {}), ...sourceIdDrafts }, ...(finalIsVndb && detailVndbId ? { vndbId: detailVndbId, vndbUrl: `https://vndb.org/${detailVndbId}`, provider: "vndb" } : {}), videoSource: finalIsVideo ? nextDraft.metadata?.videoSource || nextDraft.source || "" : nextDraft.metadata?.videoSource });
+      save({ ...nextDraft, image: finalIsVisual ? undefined : nextDraft.image, subjectId: finalIsVisual || finalIsFilm || finalIsVideo ? undefined : finalIsVndb ? (detailVndbId ? Number(detailVndbId.slice(1)) : undefined) : finalSubjectId, source: finalIsVideo ? "manual" : normalizeMediaSource(nextDraft.source, finalIsVisual || finalIsFilm ? "manual" : finalIsVndb ? "vndb" : finalSubjectId ? "bangumi" : "manual"), videoSubtype: finalIsVideo ? normalizeVideoSubtype(nextDraft.videoSubtype) : "other", metadata, tags: splitTags(tagText), characterTags: [], progress, status: nextDraft.status === "wish" && progress > 0 ? "watching" : nextDraft.status, total, updatedAt: Date.now() });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "新 ID 的详情读取失败，未保存修改");
     } finally {
@@ -338,36 +573,39 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
     <header><h2 id="detail-title">收藏详情</h2><button onClick={close} aria-label="关闭详情">×</button></header>
     <div className="detail-content">
       <section className="detail-hero">
-        <CoverImage key={isVisual ? visualCover : cover} className="detail-cover" src={isVisual ? visualCover : cover} alt={`${draft.title}封面`} placeholder={draft.title.slice(0, 2)} />
-        <div><span className="detail-status">{isMusic ? { watching: "常听", wish: "想听", finished: "已收藏", library: "稍后", dropped: "移除" }[draft.status] : { watching: "进行中", wish: "未开始", finished: "已完成", library: "搁置", dropped: "抛弃" }[draft.status]}</span><span className={`detail-media media-${mediaType}`}>{mediaMeta.find(([id]) => id === mediaType)?.[1]}</span><h3>{draft.title}</h3>{draft.jp && <p>{draft.jp}</p>}{draft.next && <div className="detail-next"><b>{draft.next}</b><small>更新提醒已开启</small></div>}</div>
+        <div className={isVisual ? "detail-gallery-cover" : "detail-cover-frame"}><CoverImage key={isVisual ? visualCover : cover} className={`detail-cover ${isVisual ? "gallery-detail-cover" : ""}`} src={isVisual ? visualCover : cover} alt={`${draft.title}封面`} placeholder={draft.title.slice(0, 2)} style={coverPositionStyle(draft.metadata?.coverPositionX, draft.metadata?.coverPositionY, draft.metadata?.coverZoom)} />{isVisual && galleryImages.length > 1 && <span>共 {galleryImages.length} 张</span>}</div>
+        <div>{!isMusic && !isVisual && !isVideo && <span className="detail-status">{{ watching: "进行中", wish: "未开始", finished: "已完成", library: "搁置", dropped: "抛弃" }[draft.status]}</span>}<span className={`detail-media media-${mediaType}`}>{mediaMeta.find(([id]) => id === mediaType)?.[1]}</span><h3>{draft.title}</h3>{draft.jp && <p>{draft.jp}</p>}{draft.next && <div className="detail-next"><b>{draft.next}</b><small>更新提醒已开启</small></div>}</div>
       </section>
       <section className="detail-personal-rating"><div><b>个人评分</b><span>你的收藏优先显示这一项</span></div><Rating score={draft.score} onRate={(score) => setDraft({ ...draft, score })} /></section>
       <div className="detail-divider" />
       <section className="detail-bangumi">
-        <div className="detail-bangumi-head"><div><span>{isVisual ? "月下集画廊" : isVideo ? "月下集视频" : isFilm ? "TMDB" : isVndb ? "VNDB" : `${draft.source || setting.sources} / Bangumi`}</span>{!isVisual && !isVideo && (detailLoading && detailSubjectId ? <b>读取中…</b> : bangumi?.score ? <b>{bangumi.score.toFixed(1)}<small> / 10</small></b> : draft.globalScore ? <b>{draft.globalScore.toFixed(1)}<small> / 10</small></b> : <b>暂无评分</b>)}</div>{bangumi && !isVisual && !isVideo && <p>{isFilm ? [bangumi.date, bangumi.platform, bangumi.metadata?.region, bangumi.metadata?.runtime ? `${bangumi.metadata.runtime} 分钟` : ""].filter(Boolean).join(" · ") : <>{bangumi.ratingTotal.toLocaleString()} 人评分{bangumi.rank ? ` · 排名 #${bangumi.rank}` : ""}<br />{[bangumi.date, bangumi.platform, bangumi.total && !isMusic ? `${bangumi.total} ${setting.unit}` : ""].filter(Boolean).join(" · ")}</>}</p>}</div>
+        <div className="detail-bangumi-head"><div><span>{isVisual ? "月下集画廊" : isVideo ? "月下集视频" : isFilm ? "TMDB" : !hasExternalMatch ? "手动条目" : isVndb ? "VNDB" : supplementalProvider ? DETAIL_SOURCE_LABELS[supplementalProvider] : "Bangumi"}</span>{!isVisual && !isVideo && (detailLoading && hasExternalMatch ? <b>读取中…</b> : bangumi?.score ? <b>{bangumi.score.toFixed(1)}<small> / 10</small></b> : draft.globalScore ? <b>{draft.globalScore.toFixed(1)}<small> / 10</small></b> : <b>暂无评分</b>)}</div>{bangumi && !isVisual && !isVideo && <p>{isFilm ? [bangumi.date, bangumi.platform, bangumi.metadata?.region, bangumi.metadata?.runtime ? `${bangumi.metadata.runtime} 分钟` : ""].filter(Boolean).join(" · ") : <>{bangumi.ratingTotal.toLocaleString()} 人评分{bangumi.rank ? ` · 排名 #${bangumi.rank}` : ""}<br />{[bangumi.date, bangumi.platform, bangumi.total && !isMusic ? `${bangumi.total} ${setting.unit}` : ""].filter(Boolean).join(" · ")}</>}</p>}</div>
         <div className="detail-summary"><b>作品简介</b><p>{summaryPending ? "正在读取详细资料…" : summaryValue || "暂时没有可用简介。"}</p></div>
-        {bangumi?.tags.length ? <div className="detail-tags"><small>{isFilm ? "TMDB 类型" : isVndb ? "VNDB 标签" : "Bangumi 标签"}</small>{bangumi.tags.slice(0, 6).map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
+        {bangumi?.tags.length ? <div className="detail-tags"><small>{isFilm ? "TMDB 类型" : isVndb ? "VNDB 标签" : supplementalProvider ? `${DETAIL_SOURCE_LABELS[supplementalProvider]} 标签` : "Bangumi 标签"}</small>{bangumi.tags.slice(0, 6).map((tag) => <span key={tag}>{tag}</span>)}</div> : null}
       </section>
       <div className="detail-divider" />
       <section className="detail-form">
         <label className="wide">中文标题<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
         <label className="wide">原名 / 外文名<input value={draft.jp} onChange={(event) => setDraft({ ...draft, jp: event.target.value })} /></label>
         <label>媒体类型<RoundedSelect value={mediaType} onChange={(next) => setDraft({ ...draft, mediaType: next, unit: mediaSettings[next].unit, source: next === "movie" || next === "tv" ? "manual" : draft.source === "vndb" && next === "game" ? "vndb" : draft.subjectId ? "bangumi" : "manual" })} options={mediaMeta.filter(([id]) => id !== "all").map(([id, label]) => ({ value: id as MediaType, label }))} ariaLabel="媒体类型" /></label>
-        <label>状态<RoundedSelect value={draft.status} onChange={(value) => setDraft({ ...draft, status: value })} options={[{ value: "watching", label: "进行中" }, { value: "wish", label: "未开始" }, { value: "finished", label: "已完成" }, { value: "library", label: "搁置" }, { value: "dropped", label: "抛弃" }]} ariaLabel="状态" /></label>
-         {!isMusic && !isVisual && !isMovie && !isVideo && <><label>当前进度（{setting.unit}）<input type="number" min="0" max={draft.total} value={draft.progress} onChange={(event) => setDraft({ ...draft, progress: Number(event.target.value) })} /></label><label>总进度（{setting.unit}）<input type="number" min="1" value={draft.total} onChange={(event) => setDraft({ ...draft, total: Number(event.target.value) })} /></label></>}
+        {!isMusic && !isVisual && !isVideo && <label>状态<RoundedSelect value={draft.status} onChange={(value) => setDraft({ ...draft, status: value })} options={[{ value: "watching", label: "进行中" }, { value: "wish", label: "未开始" }, { value: "finished", label: "已完成" }, { value: "library", label: "搁置" }, { value: "dropped", label: "抛弃" }]} ariaLabel="状态" /></label>}
+        {!isMusic && !isVisual && !isMovie && !isVideo && <><label>当前进度（{setting.unit}）<input type="number" min="0" max={draft.total} value={draft.progress} onChange={(event) => setDraft({ ...draft, progress: Number(event.target.value) })} /></label><label>总进度（{setting.unit}）<input type="number" min="1" value={draft.total} onChange={(event) => setDraft({ ...draft, total: Number(event.target.value) })} /></label></>}
+        {mediaType === "light_novel" && <label>书籍类型<RoundedSelect value={draft.metadata?.bookKind || "light_novel"} onChange={(value) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, bookKind: value }) })} options={[{ value: "light_novel", label: "轻小说" }, { value: "book", label: "普通书籍" }]} ariaLabel="书籍类型" /></label>}
          {(mediaType === "movie" || mediaType === "tv") && <><label>导演<input value={draft.metadata?.director || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, director: event.target.value }) })} /></label><label>演员<input value={(draft.metadata?.actors || []).join("，")} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, actors: event.target.value }) })} placeholder="用逗号分隔" /></label><label>年份<input type="number" min="1800" max="3000" value={draft.metadata?.year || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, year: Number(event.target.value) || undefined }) })} /></label><label>地区<input value={draft.metadata?.region || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, region: event.target.value }) })} /></label><label>季数<input type="number" min="1" max="100" value={draft.metadata?.seasons || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, seasons: Number(event.target.value) || undefined }) })} /></label><label>集数<input type="number" min="1" max="10000" value={draft.metadata?.episodes || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, episodes: Number(event.target.value) || undefined }) })} /></label></>}
         {isMusic && <><label>专辑<input value={draft.musicAlbum || ""} onChange={(event) => setDraft({ ...draft, musicAlbum: event.target.value })} /></label><label>歌手<input value={draft.musicArtist || ""} onChange={(event) => setDraft({ ...draft, musicArtist: event.target.value })} /></label><label>作词<input value={draft.lyricist || ""} onChange={(event) => setDraft({ ...draft, lyricist: event.target.value })} /></label><label>作曲<input value={draft.composer || ""} onChange={(event) => setDraft({ ...draft, composer: event.target.value })} /></label><label className="wide">来源信息<input value={draft.source || ""} onChange={(event) => setDraft({ ...draft, source: event.target.value })} placeholder="例如：个人录入、实体唱片" /></label><label className="check-field"><input type="checkbox" checked={Boolean(draft.animeSong)} onChange={(event) => setDraft({ ...draft, animeSong: event.target.checked })} />动漫歌曲</label></>}
-        {isVisual && <><label>画廊子类型<RoundedSelect value={draft.visualSubtype || "other"} onChange={(value) => setDraft({ ...draft, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels || {}).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /></label><label>作者<input value={draft.author || ""} onChange={(event) => setDraft({ ...draft, author: event.target.value })} /></label><label>Pixiv PID<input value={draft.pixivPid || ""} onChange={(event) => setDraft({ ...draft, pixivPid: event.target.value })} /></label><label>Twitter / X 来源<input value={draft.twitterSource || ""} onChange={(event) => setDraft({ ...draft, twitterSource: event.target.value })} /></label><label className="wide">来源链接<input type="url" value={draft.sourceUrl || ""} onChange={(event) => setDraft({ ...draft, sourceUrl: event.target.value })} /></label><label className="wide">标签<input value={(draft.characterTags || []).join("，")} onChange={(event) => setDraft({ ...draft, characterTags: splitTags(event.target.value) })} placeholder="用逗号分隔" /></label></>}
+        {isVisual && <><label>画廊子类型<RoundedSelect value={draft.visualSubtype || "other"} onChange={(value) => setDraft({ ...draft, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels || {}).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /></label><label>作者<input value={draft.author || ""} onChange={(event) => setDraft({ ...draft, author: event.target.value })} /></label><label>Pixiv PID<input value={draft.pixivPid || ""} onChange={(event) => setDraft({ ...draft, pixivPid: event.target.value })} /></label><label>Twitter / X 来源<input value={draft.twitterSource || ""} onChange={(event) => setDraft({ ...draft, twitterSource: event.target.value })} /></label><label className="wide">来源链接<input type="url" value={draft.sourceUrl || ""} onChange={(event) => setDraft({ ...draft, sourceUrl: event.target.value })} /></label></>}
         {isVideo && <><label>平台<input value={draft.metadata?.platform || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, platform: event.target.value }) })} /></label><label>创作者<input value={draft.metadata?.creator || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, creator: event.target.value }) })} /></label><label>时长<input value={draft.metadata?.duration || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, duration: event.target.value }) })} placeholder="例如：03:42" /></label><label>视频子分类<RoundedSelect value={draft.videoSubtype || "other"} onChange={(value) => setDraft({ ...draft, videoSubtype: normalizeVideoSubtype(value) })} options={Object.entries(videoSubtypeLabels || {}).map(([id, label]) => ({ value: id, label: String(label) }))} ariaLabel="视频子分类" /></label><label>来源信息<input value={draft.metadata?.videoSource || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, videoSource: event.target.value }) })} /></label><label>来源链接<input type="url" value={draft.sourceUrl || ""} onChange={(event) => setDraft({ ...draft, sourceUrl: event.target.value })} /></label></>}
-        {isVideo ? <><label className="wide">封面图片<input type="url" value={draft.image || ""} onChange={(event) => setDraft({ ...draft, image: event.target.value })} placeholder="粘贴封面图片地址" /></label><label className="wide">缩略图<input type="url" value={draft.thumbnail || ""} onChange={(event) => setDraft({ ...draft, thumbnail: event.target.value })} placeholder="粘贴缩略图地址（可选）" /></label></> : <CoverField value={imageValue} label={isVisual ? "缩略图地址（仅保存缩略图）" : "封面图片"} placeholder={isVisual ? "粘贴缩略图地址" : "粘贴图片地址"} previewAlt={isVisual ? "缩略图预览" : "封面预览"} inputId="detail-image-input" uploading={imageUploading} onChange={setImageValue} onUpload={chooseImage} />}
-        {!isVisual && !isVideo && <label>{isFilm ? "TMDB 评分" : isVndb ? "VNDB 评分" : "Bangumi 评分"}<input type="number" min="0" max="10" step="0.1" value={draft.globalScore || ""} onChange={(event) => setDraft({ ...draft, globalScore: Number(event.target.value) })} placeholder="0 - 10" /></label>}
+        {isVisual ? <GalleryImagesField images={galleryImages} inputId="detail-gallery-images-input" uploading={imageUploading} positionX={draft.metadata?.coverPositionX} positionY={draft.metadata?.coverPositionY} zoom={draft.metadata?.coverZoom} uploadImage={uploadImage} onChange={setGalleryImages} onPositionChange={setCoverPosition} /> : <><CoverField value={imageValue} previewValue={cover} label="封面图片" placeholder="粘贴图片地址" previewAlt="封面预览" inputId="detail-image-input" uploading={imageUploading} positionX={draft.metadata?.coverPositionX} positionY={draft.metadata?.coverPositionY} zoom={draft.metadata?.coverZoom} onChange={(value) => { setImageValue(value); resetCoverPositionForNewImage(); }} onUpload={chooseImage} onPositionChange={setCoverPosition} />{isVideo && <label className="wide">缩略图<input type="url" value={draft.thumbnail || ""} onChange={(event) => setDraft({ ...draft, thumbnail: event.target.value })} placeholder="粘贴缩略图地址（可选）" /></label>}</>}
+        {!isVisual && !isVideo && <label>{isFilm ? "TMDB 评分" : isVndb ? "VNDB 评分" : hasExternalMatch ? "Bangumi 评分" : "外部评分"}<input type="number" min="0" max="10" step="0.1" value={draft.globalScore || ""} onChange={(event) => setDraft({ ...draft, globalScore: Number(event.target.value) || undefined })} placeholder="0 - 10" /></label>}
         <label>所属合集<RoundedSelect value={draft.collection || ""} onChange={(value) => setDraft({ ...draft, collection: value })} options={[{ value: "", label: "不加入合集" }, ...collections.map((name) => ({ value: name, label: name }))]} ariaLabel="所属合集" /></label>
-        <label className="wide">个人标签<input value={tagText} onChange={(event) => setTagText(event.target.value)} placeholder="用逗号分隔，例如：热血，周更，想二刷" />{draft.tags.length > 0 && <span className="tag-editor-preview">{draft.tags.map((tag) => <em key={tag}>#{tag}</em>)}</span>}</label>
+        <label className="wide">标签<input value={tagText} onChange={(event) => setTagText(event.target.value)} placeholder="用逗号分隔，例如：热血，周更，想二刷" />{previewTags.length > 0 && <span className="tag-editor-preview">{previewTags.map((tag) => <em key={tag}>#{tag}</em>)}</span>}</label>
         <label className="wide">作品简介<textarea value={summaryValue} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, overview: event.target.value, overviewOverride: true }) })} placeholder={summaryPending ? "正在读取详细资料…" : "可自定义、修改或清空作品简介"} /></label>
         <label className="wide">私人备注<textarea value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></label>
       </section>
-       <div className={`detail-source ${!isVisual && !isVideo && !isFilm ? "detail-source-editable" : ""}`}><span>{isFilm ? `TMDB${draft.metadata?.tmdbId ? ` #${draft.metadata.tmdbId}` : ""}` : isVndb ? `VNDB${detailVndbId ? ` ${detailVndbId}` : ""}` : `${draft.source || setting.sources}`}</span>{!isVisual && !isVideo && !isFilm && (isVndb ? <label className="detail-source-id"><span>VNDB ID</span><input aria-label="VNDB ID" value={detailVndbId} onChange={(event) => setVndbId(event.target.value)} placeholder="例如 v11" /></label> : <label className="detail-source-id"><span>Bangumi ID</span><input aria-label="Bangumi ID" inputMode="numeric" pattern="[0-9]*" value={subjectIdTouched ? draft.subjectId ?? "" : draft.subjectId ?? bangumi?.id ?? ""} onChange={(event) => setSubjectId(event.target.value)} placeholder="可选" /></label>)}{isFilm && draft.metadata?.tmdbId ? <a href={`https://www.themoviedb.org/${mediaType}/${draft.metadata.tmdbId}`} target="_blank" rel="noreferrer">查看 TMDB ↗</a> : isVndb && detailVndbId ? <a href={`https://vndb.org/${detailVndbId}`} target="_blank" rel="noreferrer">查看 VNDB ↗</a> : detailSubjectId && <a href={`https://bgm.tv/subject/${detailSubjectId}`} target="_blank" rel="noreferrer">查看 Bangumi ↗</a>}</div>
-      <footer><button className="danger-button" onClick={() => { if (window.confirm(`确定移除《${draft.title}》吗？`)) remove(draft.id); }} disabled={saving}>移除条目</button>{saveError && <p className="detail-save-error" role="alert">{saveError}</p>}<button className="primary-button" onClick={() => { void submit(); }} disabled={saving}>{saving ? "刷新并保存…" : "保存修改"}</button></footer>
+      <div className={`detail-source ${!isVisual && !isVideo && !isFilm ? "detail-source-editable" : ""}`}><span>{isFilm ? `TMDB${draft.metadata?.tmdbId ? ` #${draft.metadata.tmdbId}` : ""}` : isVndb ? `VNDB${detailVndbId ? ` ${detailVndbId}` : ""}` : supplementalProvider ? `${DETAIL_SOURCE_LABELS[supplementalProvider]}${detailSupplementalId ? ` ${detailSupplementalId}` : ""}` : `${draft.source || setting.sources}`}</span>{!isVisual && !isVideo && !isFilm && (isVndb ? <label className="detail-source-id"><span>VNDB ID</span><input aria-label="VNDB ID" value={detailVndbId} onChange={(event) => setVndbId(event.target.value)} placeholder="例如 v11" /></label> : !supplementalProvider ? <label className="detail-source-id"><span>Bangumi ID</span><input aria-label="Bangumi ID" inputMode="numeric" pattern="[0-9]*" value={subjectIdTouched ? draft.subjectId ?? "" : draft.subjectId ?? bangumi?.id ?? ""} onChange={(event) => setSubjectId(event.target.value)} placeholder="可选" /></label> : null)}{isFilm && draft.metadata?.tmdbId ? <a href={`https://www.themoviedb.org/${mediaType}/${draft.metadata.tmdbId}`} target="_blank" rel="noreferrer">查看 TMDB ↗</a> : isVndb && detailVndbId ? <a href={`https://vndb.org/${detailVndbId}`} target="_blank" rel="noreferrer">查看 VNDB ↗</a> : supplementalProvider && detailSupplementalId ? <a href={supplementalProvider === "anilist" ? `https://anilist.co/${mediaType === "anime" ? "anime" : "manga"}/${detailSupplementalId}` : supplementalProvider === "mangadex" ? `https://mangadex.org/title/${detailSupplementalId}` : supplementalProvider === "google_books" ? `https://books.google.com/books?id=${encodeURIComponent(detailSupplementalId)}` : supplementalProvider === "open_library" ? `https://openlibrary.org/works/${encodeURIComponent(detailSupplementalId)}` : `https://ndlsearch.ndl.go.jp/books/${encodeURIComponent(detailSupplementalId)}`} target="_blank" rel="noreferrer">查看来源 ↗</a> : detailSubjectId && <a href={`https://bgm.tv/subject/${detailSubjectId}`} target="_blank" rel="noreferrer">查看 Bangumi ↗</a>}</div>
+      {!isVisual && !isVideo && <div className={`detail-source-links ${sourceLinksOpen ? "open" : "collapsed"}`}><button type="button" className="detail-source-links-toggle" onClick={() => setSourceLinksOpen((current) => !current)} aria-expanded={sourceLinksOpen}><span>关联来源 ID（可选）</span><b className={sourceLinksOpen ? "up" : "down"} aria-hidden="true" /></button>{sourceLinksOpen && <div className="detail-source-links-grid">{DETAIL_SOURCE_PROVIDERS.map((provider) => <label key={provider}><span>{DETAIL_SOURCE_LABELS[provider]}</span><input value={sourceIdDrafts[provider] || ""} onChange={(event) => setSourceId(provider, event.target.value)} placeholder="未绑定" /></label>)}</div>}</div>}
+      <StorageLinksField mediaId={draft.id} initialLinks={draft.storageLinks} onChange={(storageLinks) => setDraft((current) => ({ ...current, storageLinks }))} />
+      <footer><button className="danger-button" onClick={() => { if (window.confirm(`确定移除《${draft.title}》吗？`)) remove(draft.id); }} disabled={saving || imageUploading}>移除条目</button>{saveError && <p className="detail-save-error" role="alert">{saveError}</p>}<button className="primary-button" onClick={() => { void submit(); }} disabled={saving || imageUploading}>{imageUploading ? "图片上传中…" : saving ? "刷新并保存…" : "保存修改"}</button></footer>
     </div>
   </aside></div>;
 }
@@ -386,7 +624,7 @@ function CompletionModal({ item, close, confirm }: { item?: Anime; close: () => 
 function CalendarGridCard({ item, titleMode, toggle }: { item: CalendarEntry; titleMode: string; toggle: (item: CalendarEntry) => void }) {
   return <article className={item.followed ? "followed" : ""}>
     <CalendarPoster item={item} />
-    <div><h4>{titleMode === "jp" ? item.jp : item.title}</h4><span className="source-tag">{item.source}</span><small>{item.meta}</small><button onClick={() => toggle(item)}>{item.followed ? "取消追更" : "＋ 加入追番"}</button></div>
+    <div><h4>{titleMode === "jp" && item.jp ? item.jp : item.title}</h4><span className="source-tag">{item.source}</span><small>{item.meta}</small><button onClick={() => toggle(item)}>{item.followed ? "取消追更" : "＋ 加入追番"}</button></div>
   </article>;
 }
 
@@ -396,10 +634,29 @@ function sourceName(value: string) {
   return value.split("+").map((source) => ({ bangumi: "Bangumi", anilist: "AniList", animeschedule: "AnimeSchedule", custom: "自定义" } as Record<string, string>)[source] || source).join(" + ");
 }
 
+function calendarSourceTokens(value: string) {
+  return value.split("+").map((source) => source.trim().toLowerCase()).filter(Boolean).map((source) => source === "anime schedule" ? "animeschedule" : source);
+}
+
+function isTrackedCalendarEntry(item: CalendarDisplayEntry, anime: Anime[]) {
+  const providers = calendarSourceTokens(item.source);
+  const sourceIds = item.sourceIds || {};
+  for (const provider of providers) {
+    const expected = sourceIds[provider] || (providers.length === 1 && item.subjectId ? String(item.subjectId) : "");
+    if (!expected) continue;
+    if (anime.some((tracked) => {
+      const actual = tracked.metadata?.sources?.[provider]
+        || ((tracked.source === provider || provider === "bangumi" && tracked.source === "bangumi") && tracked.subjectId ? String(tracked.subjectId) : "");
+      return actual === expected;
+    })) return true;
+  }
+  return anime.some((tracked) => tracked.tags.includes("放送追更") && (tracked.title === item.title || Boolean(tracked.jp && item.jp && tracked.jp === item.jp)));
+}
+
 function CalendarListRow({ item, titleMode, toggle, editCustom }: { item: CalendarDisplayEntry; titleMode: string; toggle: (item: CalendarEntry) => void; editCustom?: (item: AiringSchedule) => void }) {
   return <article className={`calendar-list-row ${item.followed ? "followed" : ""}`}>
     <CalendarPoster item={item} />
-    <div className="calendar-list-copy"><h4>{titleMode === "jp" ? item.jp : item.title}</h4><span className="source-tag">{item.source}</span><small>{item.meta}</small></div>
+    <div className="calendar-list-copy"><h4>{titleMode === "jp" && item.jp ? item.jp : item.title}</h4><span className="source-tag">{item.source}</span><small>{item.meta}</small></div>
     <div className="calendar-row-actions">{item.schedule?.source.includes("custom") && editCustom && <button onClick={() => editCustom(item.schedule!)}>编辑放送</button>}<button onClick={() => toggle(item)}>{item.followed ? "取消追更" : "＋ 加入追番"}</button></div>
   </article>;
 }
@@ -495,21 +752,23 @@ function CalendarModal({ initialDay, close, titleMode, anime, airingSchedules, t
   const liveRows: CalendarDisplayEntry[] = activeSchedules.map((item) => {
     const images = item.metadata?.images;
     const image = images && typeof images === "object" ? (images as Record<string, unknown>).large || (images as Record<string, unknown>).common || (images as Record<string, unknown>).medium : "";
+    const sourceIds = item.metadata?.sourceIds && typeof item.metadata.sourceIds === "object" ? Object.fromEntries(Object.entries(item.metadata.sourceIds).map(([key, value]) => [key, String(value)])) : undefined;
     return {
       title: item.title,
       jp: item.jpTitle,
       subjectId: item.subjectId,
+      sourceIds,
       coverQuery: item.jpTitle || item.title,
       coverUrl: typeof image === "string" ? image.replace(/^http:\/\//i, "https://") : undefined,
       meta: `${item.airTime || "时间待定"} · 下一集 ${item.nextEpisode ?? "待定"}`,
-      followed: Boolean(item.isCollected) || anime.some((tracked) => tracked.subjectId === item.subjectId || tracked.title === item.title || (tracked.jp && tracked.jp === item.jpTitle)),
+      followed: Boolean(item.isCollected) || isTrackedCalendarEntry({ title: item.title, jp: item.jpTitle, subjectId: item.subjectId, sourceIds, coverQuery: item.jpTitle || item.title, meta: "", followed: false, source: item.source, day: ["", "一", "二", "三", "四", "五", "六", "日"][item.weekday] as WeekDay, long: false }, anime),
       source: sourceName(item.source || "bangumi"),
       day: ["", "一", "二", "三", "四", "五", "六", "日"][item.weekday] as WeekDay,
-      long: false,
+      long: isLongRunningSchedule(item.metadata, item.nextEpisode),
       schedule: item,
     };
   }).filter((item) => item.day);
-  const calendarRows = liveRows.map((item) => ({ ...item, followed: item.followed || anime.some((tracked) => tracked.title === item.title || (tracked.jp && tracked.jp === item.jp)) }));
+  const calendarRows = liveRows;
   const visible = calendarRows.filter((item) => (activeDay === "all" || item.day === activeDay) && (!onlyMine || item.followed) && (!hideLong || !item.long));
   const heading = activeDay === "all" ? "整周放送" : `星期${activeDay}`;
   const seasonNames: Record<string, string> = { winter: "冬季", spring: "春季", summer: "夏季", fall: "秋季" };
@@ -521,8 +780,8 @@ function CalendarModal({ initialDay, close, titleMode, anime, airingSchedules, t
     <div className="calendar-source-panel"><div className="calendar-source-tabs" aria-label="放送数据来源">{[["all", "全部来源"], ["bangumi", "Bangumi 官方"], ["anilist", "AniList 补充"], ["animeschedule", "AnimeSchedule"], ["custom", "用户自定义"]].map(([id, label]) => <button key={id} className={source === id ? "active" : ""} disabled={Boolean(sourceBusy)} onClick={() => void selectSource(id)}>{label}</button>)}</div><div className="calendar-source-actions"><button disabled={Boolean(sourceBusy)} onClick={() => void syncSource("bangumi")}>{sourceBusy === "bangumi" ? `Bangumi ${syncProgress}%` : "同步 Bangumi"}</button><button disabled={Boolean(sourceBusy)} onClick={() => void syncSource("anilist")}>{sourceBusy === "anilist" ? `AniList ${syncProgress}%` : "同步 AniList"}</button><button disabled={Boolean(sourceBusy)} onClick={() => void syncSource("animeschedule")}>{sourceBusy === "animeschedule" ? `AnimeSchedule ${syncProgress}%` : "同步 AnimeSchedule"}</button><button className="primary" disabled={Boolean(sourceBusy)} onClick={() => { setCustomDraft(emptyCustomAiring()); setCustomOpen((value) => !value); }}>＋ 自定义放送</button><button className="primary" disabled={Boolean(sourceBusy)} onClick={() => void syncAllSources()}>{sourceBusy === "all" ? `一键获取 ${syncProgress}%` : "一键获取全部"}</button></div></div>
     {customOpen && <div className="calendar-custom-form"><label>标题<input value={customDraft.title} onChange={(event) => setCustomDraft({ ...customDraft, title: event.target.value })} placeholder="动画名称" /></label><label>日文标题<input value={customDraft.jpTitle} onChange={(event) => setCustomDraft({ ...customDraft, jpTitle: event.target.value })} placeholder="可选" /></label><label>Bangumi Subject ID<input inputMode="numeric" value={customDraft.subjectId} onChange={(event) => setCustomDraft({ ...customDraft, subjectId: event.target.value })} placeholder="用于关联收藏，可选" /></label><label>星期<select value={customDraft.weekday} onChange={(event) => setCustomDraft({ ...customDraft, weekday: Number(event.target.value) })}>{week.map((day, index) => <option key={day} value={index + 1}>星期{day}</option>)}</select></label><label>更新时间<input type="time" value={customDraft.airTime} onChange={(event) => setCustomDraft({ ...customDraft, airTime: event.target.value })} /></label><label>下一集<input inputMode="numeric" value={customDraft.nextEpisode} onChange={(event) => setCustomDraft({ ...customDraft, nextEpisode: event.target.value })} placeholder="集数" /></label><label>下一集时间<input type="datetime-local" value={customDraft.nextAirAt} onChange={(event) => setCustomDraft({ ...customDraft, nextAirAt: event.target.value })} /></label><div className="calendar-custom-actions">{customDraft.id && <button className="danger-text" disabled={Boolean(sourceBusy)} onClick={() => void deleteCustom()}>删除</button>}<button disabled={Boolean(sourceBusy)} onClick={() => { setCustomOpen(false); setCustomDraft(emptyCustomAiring()); }}>取消</button><button className="primary" disabled={Boolean(sourceBusy) || !customDraft.title.trim()} onClick={() => void saveCustom()}>{customDraft.id ? "保存修改" : "添加放送"}</button></div></div>}
     {sourceMessage && <p className="calendar-source-message" role="status">{sourceMessage}</p>}
-    <div className="calendar-body"><div className="calendar-day-title"><div><h3>{heading}</h3><p>当前条件下有 {visible.length} 部动画</p></div><span>{source === "all" ? "Bangumi + AniList + AnimeSchedule + 自定义" : sourceName(source)}</span></div>{activeDay === "all" ? <div className="calendar-week-groups">{week.map((day) => { const items = visible.filter((item) => item.day === day); return <section className="calendar-week-group" key={day}><header><h4>星期{day}</h4><span>{items.length} 部</span></header><div>{items.length ? items.map((item) => <CalendarListRow key={item.day + ":" + item.title} item={item} titleMode={titleMode} toggle={toggle} editCustom={editCustom} />) : <p className="calendar-group-empty">当天暂无更新</p>}</div></section>; })}</div> : <div className="calendar-grid">{visible.map((item) => <CalendarGridCard key={item.day + ":" + item.title} item={item} titleMode={titleMode} toggle={toggle} />)}{!visible.length && <div className="calendar-empty"><b>没有符合条件的动画</b><p>可以切换星期，或取消一个筛选条件。</p></div>}</div>}</div>
+    <div className="calendar-body"><div className="calendar-day-title"><div><h3>{heading}</h3><p>当前条件下有 {visible.length} 部动画</p></div><span>{source === "all" ? "Bangumi + AniList + AnimeSchedule + 自定义" : sourceName(source)}</span></div>{activeDay === "all" ? <div className="calendar-week-groups">{week.map((day) => { const items = visible.filter((item) => item.day === day); return <section className="calendar-week-group" key={day}><header><h4>星期{day}</h4><span>{items.length} 部</span></header><div>{items.length ? items.map((item) => <CalendarListRow key={`${item.source}:${item.subjectId ?? item.title}:${item.day}`} item={item} titleMode={titleMode} toggle={toggle} editCustom={editCustom} />) : <p className="calendar-group-empty">当天暂无更新</p>}</div></section>; })}</div> : <div className="calendar-grid">{visible.map((item) => <CalendarGridCard key={`${item.source}:${item.subjectId ?? item.title}:${item.day}`} item={item} titleMode={titleMode} toggle={toggle} />)}{!visible.length && <div className="calendar-empty"><b>没有符合条件的动画</b><p>可以切换星期，或取消一个筛选条件。</p></div>}</div>}</div>
   </section></div>;
 }
 
-export { AddModal, CollectionManagerModal, CollectionModal, DetailDrawer, CompletionModal, CalendarGridCard, CalendarListRow, CalendarModal, TagManagerModal, VideoSubtypeModal, VisualSubtypeModal };
+export { AddModal, CollectionManagerModal, CollectionModal, DetailDrawer, CompletionModal, CalendarModal, TagManagerModal, VideoSubtypeModal, VisualSubtypeModal };

@@ -2,17 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { customBackgroundUrl, fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, loadDevices, loadMedia, loadTrackerState, removeDevice, removeMedia, saveDevice, saveMedia, saveTrackerState, searchRemoteAnime, uploadAvatar, uploadCustomBackground, uploadMediaImage, type MediaRecordPayload } from "./lib/client-api";
-import { defaultDeviceCategoryLabels, defaultDeviceSubCategories, defaultSyncSettings, defaultTagPreferences, defaultVideoSubtypeLabels, defaultVisualSubtypeLabels, deviceCategoriesForPreferences, normalizeDeviceCategoryLabels, normalizeDeviceSubCategories, normalizeMediaMetadata, normalizeMediaType, normalizeSyncSettings, normalizeTagPreferences, normalizeVideoSubtype, normalizeVideoSubtypeLabels, normalizeVisualSubtype, normalizeVisualSubtypeLabels, tagDisplayName, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap, type SyncField, type SyncProvider, type SyncSettings, type TagPreferences, type VideoSubtypeLabels, type VisualSubtypeLabels } from "./lib/constants";
+import { defaultDeviceCategoryLabels, defaultDeviceSubCategories, defaultSyncSettings, defaultTagPreferences, defaultVideoSubtypeLabels, defaultVisualSubtypeLabels, deviceCategoriesForPreferences, isCollectionMediaType, normalizeDeviceCategoryLabels, normalizeDeviceSubCategories, normalizeMediaMetadata, normalizeMediaType, normalizeSyncSettings, normalizeTagPreferences, normalizeVideoSubtype, normalizeVideoSubtypeLabels, normalizeVisualSubtype, normalizeVisualSubtypeLabels, tagDisplayName, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap, type SyncField, type SyncProvider, type SyncSettings, type TagPreferences, type VideoSubtypeLabels, type VisualSubtypeLabels } from "./lib/constants";
 import { CollectionSummary } from "./components/tracker/collection-summary";
 import { DeviceLibrary, normalizeDevice as normalizeLibraryDevice } from "./components/tracker/device-library";
 import { DeviceModal, DeviceSubCategoryModal, ReceiptModal } from "./components/tracker/device-modals";
 import { MediaLibrary } from "./components/tracker/media-library";
 import { AddModal, CalendarModal, CollectionManagerModal, CollectionModal, CompletionModal, DetailDrawer, VideoSubtypeModal, VisualSubtypeModal } from "./components/tracker/media-modals";
 import { ConnectivityModal, SettingsModal, SyncMenu, SyncModal } from "./components/tracker/integration-modals";
-import { archivedCounts, defaultCollections, defaultMediaOrder, formatBeijingTime, mediaSettings, normalizeMediaOrder, sanitizeCollectionName, scoreLabels, seedAnime, seedDevices, splitTags } from "./lib/tracker-data";
+import { archivedCounts, defaultCollections, defaultMediaOrder, formatBeijingTime, mediaSettings, normalizeMediaOrder, sanitizeCollectionName, scoreLabels, splitTags } from "./lib/tracker-data";
 import { refreshBangumiRecords } from "./lib/agent-hikari";
 import { normalizeMediaSource } from "./lib/media-source";
-import type { AddForm, AiringSchedule, Anime, CalendarDay, CalendarEntry, Device, DeviceForm, LayoutMode, MediaTab, MediaType, Modal, SearchResult, SortMode, Status, SyncTarget, View } from "./lib/tracker-types";
+import { mediaImageUrl, normalizeMediaImages, type AddForm, type AiringSchedule, type Anime, type CalendarDay, type CalendarEntry, type Device, type DeviceForm, type LayoutMode, type MediaTab, type MediaType, type Modal, type SearchResult, type SortMode, type Status, type SyncTarget, type View } from "./lib/tracker-types";
 
 const MEDIA_CACHE_KEY = "yuexiaji:media-cache:v1";
 const DEVICE_CACHE_KEY = "yuexiaji:device-cache:v1";
@@ -65,6 +65,28 @@ function parseVndbId(value: string) {
   return match ? match[1].toLowerCase() : undefined;
 }
 
+function calendarSourceTokens(source: string) {
+  return source.split("+").map((value) => value.trim().toLowerCase()).filter(Boolean).map((value) => value === "anime schedule" ? "animeschedule" : value);
+}
+
+function calendarEntryMatches(item: Anime, entry: CalendarEntry) {
+  const providers = calendarSourceTokens(entry.source);
+  const sourceIds = { ...(entry.sourceIds || {}) };
+  if (entry.subjectId && !Object.keys(sourceIds).length && providers.length === 1) sourceIds[providers[0]] = String(entry.subjectId);
+  if (entry.subjectId && providers.includes("bangumi")) sourceIds.bangumi ||= String(entry.subjectId);
+  for (const provider of providers) {
+    const expected = sourceIds[provider];
+    if (!expected) continue;
+    const actual = item.metadata?.sources?.[provider]
+      || ((provider === "bangumi" || provider === "vndb" || item.source === provider) && item.subjectId ? String(item.subjectId) : "");
+    if (actual && String(actual) === expected) return true;
+  }
+  // A title is only a safe fallback for entries explicitly created from the
+  // calendar. Ordinary hand-entered records with the same title must remain.
+  const explicitlyTracked = item.tags.some((tag) => tag.trim() === "放送追更");
+  return explicitlyTracked && (item.title === entry.title || Boolean(item.jp && entry.jp && item.jp === entry.jp));
+}
+
 function detailToSearchResult(detail: SearchResult & { summary?: string; overview?: string; rating?: number; score?: number; coverImage?: string; image?: string; originalTitle?: string; metadata?: ReturnType<typeof normalizeMediaMetadata> }) {
   return {
     id: detail.id,
@@ -85,30 +107,67 @@ function detailToSearchResult(detail: SearchResult & { summary?: string; overvie
   } satisfies SearchResult;
 }
 
+function parseLoadedMetadata(value: unknown) {
+  if (typeof value !== "string") return normalizeMediaMetadata(value);
+  try { return normalizeMediaMetadata(JSON.parse(value)); } catch { return normalizeMediaMetadata(); }
+}
+
+function normalizeLoadedTags(value: unknown) {
+  let values: unknown[] = [];
+  if (Array.isArray(value)) values = value;
+  else if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      values = Array.isArray(parsed) ? parsed : splitTags(value);
+    } catch {
+      values = splitTags(value);
+    }
+  }
+  return Array.from(new Set(values.map((tag) => String(tag).trim().slice(0, 80)).filter(Boolean))).slice(0, 30);
+}
+
 function normalizeLoadedAnime(item: Partial<Anime> & Record<string, unknown>, index = 0): Anime {
   const mediaType = normalizeMediaType(typeof item.mediaType === "string" ? item.mediaType : typeof item.type === "string" ? item.type : "anime");
   const kind = item.kind === "coral" || item.kind === "yellow" || item.kind === "girls" || item.kind === "escape" ? item.kind : "coral";
+  const rawSubjectId = Number(item.subjectId);
+  const subjectId = ["visual", "movie", "tv", "video"].includes(mediaType) || !Number.isSafeInteger(rawSubjectId) || rawSubjectId <= 0 ? undefined : rawSubjectId;
+  const tracksProgress = !["music", "visual", "movie", "video"].includes(mediaType);
+  const defaultTotal = mediaType === "game" ? 100 : 12;
+  const rawTotal = Number(item.total);
+  const total = tracksProgress && Number.isFinite(rawTotal) && rawTotal > 0 ? Math.floor(rawTotal) : tracksProgress ? defaultTotal : 1;
+  const rawProgress = Number(item.progress);
+  const progress = tracksProgress && Number.isFinite(rawProgress) ? Math.min(total, Math.max(0, Math.floor(rawProgress))) : 0;
+  const rawId = Number(item.id);
+  const score = Number(item.score);
+  const globalScore = Number(item.globalScore);
+  const loadedTags = normalizeLoadedTags(item.tags);
+  const loadedCharacterTags = normalizeLoadedTags(item.characterTags);
+  const personalTags = Array.from(new Set([...loadedTags, ...loadedCharacterTags])).slice(0, 30);
+  const storedImage = mediaType === "visual" ? undefined : typeof (item.image ?? item.cover) === "string" ? String(item.image ?? item.cover) : undefined;
+  const image = !subjectId && storedImage?.startsWith("/api/cover?") ? undefined : storedImage;
+  const thumbnail = typeof item.thumbnail === "string" ? item.thumbnail : ["visual", "video"].includes(mediaType) && typeof item.image === "string" ? item.image : undefined;
   return {
-    id: Number(item.id) || Date.now() + index,
+    id: Number.isSafeInteger(rawId) && rawId > 0 ? rawId : Date.now() + index,
     title: typeof item.title === "string" && item.title.trim() ? item.title : "未命名番剧",
     jp: typeof item.jp === "string" ? item.jp : "",
     note: typeof item.note === "string" ? item.note : typeof item.description === "string" ? item.description : "",
-    progress: ["music", "visual", "movie", "video"].includes(mediaType) ? 0 : Number(item.progress) || 0,
-    total: ["music", "visual", "movie", "video"].includes(mediaType) ? 1 : Number(item.total) || 12,
+    progress,
+    total,
     status: item.status === "wish" || item.status === "finished" || item.status === "library" || item.status === "dropped" ? item.status : "watching",
     kind,
-    score: typeof item.score === "number" ? item.score : undefined,
+    score: Number.isInteger(score) && score >= 1 && score <= 10 ? score : undefined,
     next: typeof item.next === "string" ? item.next : undefined,
-    image: mediaType === "visual" ? undefined : typeof (item.image ?? item.cover) === "string" ? String(item.image ?? item.cover) : undefined,
+    image,
     cover: typeof item.cover === "string" ? item.cover : undefined,
-    thumbnail: typeof item.thumbnail === "string" ? item.thumbnail : ["visual", "video"].includes(mediaType) && typeof item.image === "string" ? item.image : undefined,
-    subjectId: ["visual", "movie", "tv", "video"].includes(mediaType) ? undefined : Number(item.subjectId) || undefined,
+    thumbnail,
+    images: normalizeMediaImages(item.images, mediaType === "visual" ? thumbnail : ""),
+    subjectId,
     mediaType,
     unit: typeof item.unit === "string" ? item.unit : mediaSettings[mediaType].unit,
-    globalScore: typeof item.globalScore === "number" ? item.globalScore : undefined,
-    source: ["visual", "movie", "tv", "video"].includes(mediaType) ? (mediaType === "visual" && item.source === "local" ? "local" : "manual") : normalizeMediaSource(typeof item.source === "string" ? item.source : undefined, item.subjectId ? "bangumi" : "manual"),
+    globalScore: Number.isFinite(globalScore) && globalScore > 0 && globalScore <= 10 ? globalScore : undefined,
+    source: ["visual", "movie", "tv", "video"].includes(mediaType) ? (mediaType === "visual" && item.source === "local" ? "local" : "manual") : normalizeMediaSource(typeof item.source === "string" ? item.source : undefined, subjectId ? "bangumi" : "manual"),
     collection: sanitizeCollectionName(typeof item.collection === "string" ? item.collection : ""),
-    tags: Array.isArray(item.tags) ? item.tags.map(String).filter(Boolean) : splitTags(typeof item.tags === "string" ? item.tags : ""),
+    tags: personalTags,
     musicAlbum: typeof item.musicAlbum === "string" ? item.musicAlbum : "",
     musicArtist: typeof item.musicArtist === "string" ? item.musicArtist : "",
     lyricist: typeof item.lyricist === "string" ? item.lyricist : "",
@@ -120,16 +179,18 @@ function normalizeLoadedAnime(item: Partial<Anime> & Record<string, unknown>, in
     pixivPid: typeof item.pixivPid === "string" ? item.pixivPid : "",
     author: typeof item.author === "string" ? item.author : "",
     twitterSource: typeof item.twitterSource === "string" ? item.twitterSource : "",
-    characterTags: Array.isArray(item.characterTags) ? item.characterTags.map(String).filter(Boolean) : [],
-    metadata: normalizeMediaMetadata(item.metadata),
+    characterTags: [],
+    metadata: parseLoadedMetadata(item.metadata),
     platform: typeof item.platform === "string" ? item.platform : undefined,
     creator: typeof item.creator === "string" ? item.creator : undefined,
     duration: typeof item.duration === "string" ? item.duration : undefined,
-    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : 0,
+    storageLinks: Array.isArray(item.storageLinks) ? item.storageLinks as Anime["storageLinks"] : [],
+    updatedAt: typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt) && item.updatedAt >= 0 ? item.updatedAt : 0,
   };
 }
 
 function mediaPayload(item: Anime, id?: number): MediaRecordPayload {
+  const tags = splitTags([...item.tags, ...(item.characterTags || [])].join("，"));
   return {
     ...(id ? { id } : {}),
     mediaType: item.mediaType || "anime",
@@ -146,10 +207,11 @@ function mediaPayload(item: Anime, id?: number): MediaRecordPayload {
     image: item.image,
     cover: item.cover,
     thumbnail: item.thumbnail,
+    ...(item.mediaType === "visual" ? { images: (item.images || []).map((image) => ({ ...image, url: mediaImageUrl(image), thumbnail: image.thumbnail || mediaImageUrl(image) })) } : {}),
     globalScore: item.globalScore,
     source: item.source,
     collection: item.collection,
-    tags: item.tags,
+    tags,
     musicAlbum: item.musicAlbum,
     musicArtist: item.musicArtist,
     lyricist: item.lyricist,
@@ -161,7 +223,7 @@ function mediaPayload(item: Anime, id?: number): MediaRecordPayload {
     pixivPid: item.pixivPid,
     author: item.author,
     twitterSource: item.twitterSource,
-    characterTags: item.characterTags,
+    characterTags: [],
     metadata: item.metadata,
     platform: item.platform,
     creator: item.creator,
@@ -173,19 +235,20 @@ function mediaPayload(item: Anime, id?: number): MediaRecordPayload {
 
 
 export default function Home() {
-  const [anime, setAnime] = useState<Anime[]>(seedAnime);
+  const [anime, setAnime] = useState<Anime[]>([]);
   const [modal, setModal] = useState<Modal>(null);
   const [closingModal, setClosingModal] = useState<NonNullable<Modal> | null>(null);
   const [calendarDay, setCalendarDay] = useState<CalendarDay>("五");
   const [activeStatus, setActiveStatus] = useState<Status | "all">("watching");
   const [activeMedia, setActiveMedia] = useState<MediaType | "all">("all");
+  const [includeStandaloneMedia, setIncludeStandaloneMedia] = useState(false);
   const [mediaOrder, setMediaOrder] = useState<MediaTab[]>(defaultMediaOrder);
   const [sortMode, setSortMode] = useState<SortMode>("updated");
   const [scoreFloor, setScoreFloor] = useState(0);
   const [ratingScope, setRatingScope] = useState<"all" | "personal" | "global">("personal");
   const [collections, setCollections] = useState(defaultCollections);
   const [activeCollection, setActiveCollection] = useState("all");
-  const [activeTag, setActiveTag] = useState("all");
+  const [activeTags, setActiveTags] = useState<string[]>([]);
   const [musicAlbum, setMusicAlbum] = useState("all");
   const [musicArtist, setMusicArtist] = useState("all");
   const [musicLyricist, setMusicLyricist] = useState("all");
@@ -222,10 +285,10 @@ export default function Home() {
   const [syncing, setSyncing] = useState<SyncTarget | null>(null);
   const [syncDialogTarget, setSyncDialogTarget] = useState<SyncTarget | null>(null);
   const [airingSchedules, setAiringSchedules] = useState<AiringSchedule[]>([]);
-  const [addForm, setAddForm] = useState<AddForm>({ title: "", jp: "", total: 12, status: "watching", note: "", image: "", thumbnail: "", mediaType: "anime", collection: "", tags: "", musicAlbum: "", musicArtist: "", lyricist: "", composer: "", source: "", animeSong: false, visualSubtype: "other", videoSubtype: "other", sourceUrl: "", pixivPid: "", author: "", twitterSource: "", characterTags: "", metadata: normalizeMediaMetadata() });
+  const [addForm, setAddForm] = useState<AddForm>({ title: "", jp: "", total: 12, status: "watching", note: "", image: "", thumbnail: "", images: [], mediaType: "anime", collection: "", tags: "", musicAlbum: "", musicArtist: "", lyricist: "", composer: "", source: "", animeSong: false, visualSubtype: "other", videoSubtype: "other", sourceUrl: "", pixivPid: "", author: "", twitterSource: "", characterTags: "", metadata: normalizeMediaMetadata() });
   const coverBackfillStarted = useRef(false);
   const [activeView, setActiveView] = useState<View>("acg");
-  const [devices, setDevices] = useState<Device[]>(seedDevices);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [devicesPersistable, setDevicesPersistable] = useState(true);
   const [deviceCategoryTab, setDeviceCategoryTab] = useState<Device["category"] | "all">("all");
   const [deviceSubCategory, setDeviceSubCategory] = useState("all");
@@ -240,6 +303,10 @@ export default function Home() {
   const [deviceLayout, setDeviceLayout] = useState<LayoutMode>("grid");
   const mediaDragIndex = useRef<number | null>(null);
   const persistedMediaIds = useRef<Set<number>>(new Set());
+  const mediaSaveQueues = useRef<Map<number, Promise<void>>>(new Map());
+  const mediaServerIds = useRef<Map<number, number>>(new Map());
+  const mediaLocalIds = useRef<Map<number, number>>(new Map());
+  const mediaSaveVersions = useRef<Map<number, number>>(new Map());
   const layoutPreferencesLoaded = useRef(false);
   const avatarPreferenceLoaded = useRef(false);
   const deviceCategories = useMemo(() => deviceCategoriesForPreferences(deviceCategoryLabels, deviceSubCategories), [deviceCategoryLabels, deviceSubCategories]);
@@ -363,7 +430,7 @@ export default function Home() {
       if (mediaResult.status === "fulfilled") {
         const loaded = mediaResult.value.subjects.map((item, index) => normalizeLoadedAnime(item as Partial<Anime> & Record<string, unknown>, index));
         persistedMediaIds.current = new Set(loaded.map((item) => item.id));
-        setAnime(loaded.length ? loaded : seedAnime);
+        setAnime(loaded);
         writeClientCache(MEDIA_CACHE_KEY, loaded);
       }
       if (stateResult.status === "fulfilled") {
@@ -376,7 +443,7 @@ export default function Home() {
         }
       }
       if (devicesResult.status === "fulfilled") {
-        const loaded = Array.isArray(devicesResult.value.devices) ? devicesResult.value.devices.map(normalizeLibraryDevice) : seedDevices;
+        const loaded = Array.isArray(devicesResult.value.devices) ? devicesResult.value.devices.map(normalizeLibraryDevice) : [];
         setDevices(loaded);
         setDevicesPersistable(true);
         writeClientCache(DEVICE_CACHE_KEY, loaded);
@@ -405,31 +472,48 @@ export default function Home() {
     if (stateLoaded) writeClientCache(DEVICE_CACHE_KEY, devices);
   }, [devices, stateLoaded]);
 
-  const persistAnime = async (item: Anime) => {
-    const id = persistedMediaIds.current.has(item.id) ? item.id : undefined;
-    try {
-      const result = await saveMedia(mediaPayload(item, id));
+  const persistAnime = (item: Anime) => {
+    const queueId = mediaLocalIds.current.get(item.id) || item.id;
+    const version = (mediaSaveVersions.current.get(queueId) || 0) + 1;
+    mediaSaveVersions.current.set(queueId, version);
+    const previous = mediaSaveQueues.current.get(queueId) || Promise.resolve();
+    const task = previous.catch(() => undefined).then(async () => {
+      const existingId = persistedMediaIds.current.has(item.id)
+        ? item.id
+        : mediaServerIds.current.get(queueId) || (persistedMediaIds.current.has(queueId) ? queueId : undefined);
+      const result = await saveMedia(mediaPayload(item, existingId));
       if (!result.subject) return;
       const saved = normalizeLoadedAnime(result.subject as Partial<Anime> & Record<string, unknown>);
       persistedMediaIds.current.add(saved.id);
-      setAnime((items) => items.map((current) => current.id === item.id ? saved : current));
-    } catch (error) {
+      if (saved.id !== queueId) {
+        mediaServerIds.current.set(queueId, saved.id);
+        mediaLocalIds.current.set(saved.id, queueId);
+        setAnime((items) => items.map((current) => current.id === queueId ? { ...current, id: saved.id } : current));
+        setDetailId((current) => current === queueId ? saved.id : current);
+        setCompletionId((current) => current === queueId ? saved.id : current);
+      }
+      if (mediaSaveVersions.current.get(queueId) === version) {
+        setAnime((items) => items.map((current) => current.id === item.id || current.id === queueId || current.id === saved.id ? saved : current));
+      }
+    }).catch((error) => {
       setToast(error instanceof Error ? error.message : "媒体保存失败");
-    }
+    }).finally(() => {
+      if (mediaSaveQueues.current.get(queueId) === task) mediaSaveQueues.current.delete(queueId);
+    });
+    mediaSaveQueues.current.set(queueId, task);
+    return task;
   };
 
   useEffect(() => {
     if (!stateLoaded || coverBackfillStarted.current) return;
-    const missing = anime.filter((item) => item.mediaType === "visual" ? !item.thumbnail : item.mediaType === "video" ? false : !item.image || item.image.includes("lain.bgm.tv")).slice(0, 30);
+    const missing = anime.filter((item) => item.mediaType === "anime" && item.source === "bangumi" && item.subjectId && (!item.image || item.image.includes("lain.bgm.tv"))).slice(0, 30);
     if (!missing.length) { coverBackfillStarted.current = true; return; }
     coverBackfillStarted.current = true;
     const ids = new Set(missing.map((item) => item.id));
     const timer = window.setTimeout(() => {
-      setAnime((items) => {
-        const next = items.map((item) => ids.has(item.id) && item.mediaType !== "visual" && item.mediaType !== "video" ? { ...item, image: highResCoverUrl(item.jp || item.title) } : item);
-        next.filter((item) => ids.has(item.id) && persistedMediaIds.current.has(item.id)).forEach((item) => { void persistAnime(item); });
-        return next;
-      });
+      const updates = anime.filter((item) => ids.has(item.id)).map((item) => ({ ...item, image: highResCoverUrl(item.jp || item.title) }));
+      setAnime((items) => items.map((item) => ids.has(item.id) ? { ...item, image: highResCoverUrl(item.jp || item.title) } : item));
+      updates.filter((item) => persistedMediaIds.current.has(item.id) || mediaServerIds.current.has(item.id)).forEach((item) => { void persistAnime(item); });
     }, 0);
     return () => window.clearTimeout(timer);
   }, [anime, stateLoaded]);
@@ -477,47 +561,70 @@ export default function Home() {
   useEffect(() => { writeClientCache(TAG_PREFERENCES_KEY, tagPreferences); }, [tagPreferences]);
 
   const mediaTags = useMemo(() => {
-    const scoped = activeMedia === "all" ? anime : anime.filter((item) => normalizeMediaType(item.mediaType) === activeMedia);
+    const collectionScope = activeMedia === "all" ? !includeStandaloneMedia : isCollectionMediaType(activeMedia);
+    const scoped = anime.filter((item) => {
+      const mediaType = normalizeMediaType(item.mediaType);
+      const inMedia = activeMedia === "all" ? includeStandaloneMedia || isCollectionMediaType(mediaType) : mediaType === activeMedia;
+      const inStatus = !collectionScope || activeStatus === "all" || item.status === activeStatus;
+      const inCollection = activeCollection === "all" || item.collection === activeCollection;
+      return inMedia && inStatus && inCollection;
+    });
     return Array.from(new Set(scoped.flatMap((item) => item.tags.map((tag) => tagDisplayName(tag, tagPreferences))))).sort((a, b) => a.localeCompare(b, "zh-CN"));
-  }, [anime, activeMedia, tagPreferences]);
+  }, [anime, activeCollection, activeMedia, activeStatus, includeStandaloneMedia, tagPreferences]);
+  const hiddenTagSet = useMemo(() => {
+    const hidden = new Set(tagPreferences.hidden);
+    Object.entries(tagPreferences.aliases).forEach(([raw, display]) => {
+      if (hidden.has(raw)) hidden.add(display);
+    });
+    return hidden;
+  }, [tagPreferences]);
   useEffect(() => {
-    if (activeTag === "all" || mediaTags.includes(activeTag)) return;
-    const timer = window.setTimeout(() => setActiveTag("all"), 0);
+    if (activeTags.every((tag) => mediaTags.includes(tag))) return;
+    const timer = window.setTimeout(() => {
+      setActiveTags((current) => current.filter((tag) => mediaTags.includes(tag)));
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [activeTag, mediaTags]);
+  }, [activeTags, mediaTags]);
   const musicFacets = useMemo(() => {
     const music = anime.filter((item) => (item.mediaType || "anime") === "music");
     const values = (key: "musicAlbum" | "musicArtist" | "lyricist") => Array.from(new Set(music.map((item) => item[key] || "").filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN"));
     return { albums: values("musicAlbum"), artists: values("musicArtist"), lyricists: values("lyricist") };
   }, [anime]);
   const visibleAnime = useMemo(() => anime.filter((item) => {
-    const inStatus = activeStatus === "all" || item.status === activeStatus;
-    const inMedia = activeMedia === "all" || (item.mediaType || "anime") === activeMedia;
+    const mediaType = normalizeMediaType(item.mediaType);
+    const collectionScope = activeMedia === "all" ? !includeStandaloneMedia : isCollectionMediaType(activeMedia);
+    const inStatus = !collectionScope || activeStatus === "all" || item.status === activeStatus;
+    const inMedia = activeMedia === "all" ? includeStandaloneMedia || isCollectionMediaType(mediaType) : mediaType === activeMedia;
     const inCollection = activeCollection === "all" || item.collection === activeCollection;
-    const inTag = activeTag === "all" || item.tags.some((tag) => tagDisplayName(tag, tagPreferences) === activeTag);
+    const itemTags = new Set(item.tags.map((tag) => tagDisplayName(tag, tagPreferences)));
+    const inTag = activeTags.every((tag) => itemTags.has(tag));
+    const hiddenByTag = item.tags.some((tag) => hiddenTagSet.has(tag) || hiddenTagSet.has(tagDisplayName(tag, tagPreferences)));
     const inSearch = !listQuery.trim() || `${item.title} ${item.jp} ${item.tags.join(" ")} ${(item.characterTags || []).join(" ")} ${item.author || ""} ${item.pixivPid || ""} ${item.musicAlbum || ""} ${item.musicArtist || ""} ${item.lyricist || ""} ${item.composer || ""}`.toLowerCase().includes(listQuery.trim().toLowerCase());
     const inMusicFacet = activeMedia !== "music" || ((musicAlbum === "all" || item.musicAlbum === musicAlbum) && (musicArtist === "all" || item.musicArtist === musicArtist) && (musicLyricist === "all" || item.lyricist === musicLyricist) && (!animeSongsOnly || item.animeSong));
     const inVisualFacet = activeMedia !== "visual" || visualSubtype === "all" || item.visualSubtype === visualSubtype;
     const inVideoFacet = activeMedia !== "video" || videoSubtype === "all" || item.videoSubtype === videoSubtype;
-    const passesDroppedFilter = !(activeStatus === "all" && hideDropped && item.status === "dropped");
+    const passesDroppedFilter = !((activeMedia === "all" || isCollectionMediaType(activeMedia)) && activeStatus === "all" && hideDropped && item.status === "dropped");
     const score = ratingScope === "personal" ? (item.score || 0) : ratingScope === "global" ? (item.globalScore || 0) : Math.max(item.score || 0, item.globalScore || 0);
-    return inStatus && inMedia && inCollection && inTag && inSearch && inMusicFacet && inVisualFacet && inVideoFacet && passesDroppedFilter && score >= scoreFloor;
+    return !hiddenByTag && inStatus && inMedia && inCollection && inTag && inSearch && inMusicFacet && inVisualFacet && inVideoFacet && passesDroppedFilter && score >= scoreFloor;
   }).sort((a, b) => {
     if (sortMode === "personal") return (b.score || 0) - (a.score || 0);
     if (sortMode === "global") return (b.globalScore || 0) - (a.globalScore || 0);
     if (sortMode === "progress") return (b.progress / Math.max(b.total, 1)) - (a.progress / Math.max(a.total, 1));
     if (sortMode === "title") return a.title.localeCompare(b.title, "zh-CN");
     return (b.updatedAt || 0) - (a.updatedAt || 0);
-  }), [anime, activeStatus, activeMedia, activeCollection, activeTag, listQuery, musicAlbum, musicArtist, musicLyricist, animeSongsOnly, visualSubtype, videoSubtype, hideDropped, scoreFloor, ratingScope, sortMode, tagPreferences]);
+  }), [anime, activeStatus, activeMedia, includeStandaloneMedia, activeCollection, activeTags, listQuery, musicAlbum, musicArtist, musicLyricist, animeSongsOnly, visualSubtype, videoSubtype, hideDropped, scoreFloor, ratingScope, sortMode, tagPreferences, hiddenTagSet]);
   const statusCounts = useMemo(() => {
     const counts: Record<Status | "all", number> = { ...archivedCounts, all: 0 };
-    anime.forEach((item) => { counts[item.status] += 1; });
-    counts.all = counts.watching + counts.wish + counts.finished + counts.library + counts.dropped;
+    anime.filter((item) => isCollectionMediaType(normalizeMediaType(item.mediaType))).forEach((item) => { counts[item.status] += 1; });
+    counts.all = anime.length;
     return counts;
   }, [anime]);
   const activeMediaCounts = useMemo(() => {
     const actual: Record<MediaType, number> = { anime: 0, movie: 0, tv: 0, game: 0, light_novel: 0, manga: 0, music: 0, visual: 0, video: 0 };
-    anime.filter((item) => item.status === "watching").forEach((item) => { actual[normalizeMediaType(item.mediaType)] += 1; });
+    anime.forEach((item) => {
+      const mediaType = normalizeMediaType(item.mediaType);
+      if (!isCollectionMediaType(mediaType) || item.status === "watching") actual[mediaType] += 1;
+    });
     return actual;
   }, [anime]);
   const activeCollectionTotal = (['anime', 'movie', 'tv', 'game', 'light_novel', 'manga'] as MediaType[]).reduce((sum, type) => sum + activeMediaCounts[type], 0);
@@ -548,13 +655,35 @@ export default function Home() {
       return next;
     });
   };
-  const removePersistedAnime = async (id: number) => {
-    if (!persistedMediaIds.current.has(id)) return;
+  const removePersistedAnime = async (id: number): Promise<boolean> => {
+    const queueId = mediaLocalIds.current.get(id) || id;
+    // Invalidate any in-flight save before waiting, so its response cannot
+    // repopulate an item that the user has just removed.
+    mediaSaveVersions.current.set(queueId, (mediaSaveVersions.current.get(queueId) || 0) + 1);
+    const pending = mediaSaveQueues.current.get(queueId);
+    if (pending) await pending;
+    const persistedId = mediaServerIds.current.get(queueId)
+      || (persistedMediaIds.current.has(id) ? id : persistedMediaIds.current.has(queueId) ? queueId : undefined);
+    if (!persistedId) {
+      mediaSaveVersions.current.delete(queueId);
+      mediaServerIds.current.delete(queueId);
+      mediaLocalIds.current.delete(id);
+      mediaLocalIds.current.delete(queueId);
+      return true;
+    }
     try {
-      await removeMedia(id);
+      await removeMedia(persistedId);
+      persistedMediaIds.current.delete(persistedId);
       persistedMediaIds.current.delete(id);
+      persistedMediaIds.current.delete(queueId);
+      mediaServerIds.current.delete(queueId);
+      mediaLocalIds.current.delete(persistedId);
+      mediaLocalIds.current.delete(queueId);
+      mediaSaveVersions.current.delete(queueId);
+      return true;
     } catch (error) {
       setToast(error instanceof Error ? error.message : "媒体删除失败");
+      return false;
     }
   };
   const deleteSelectedAnime = async (ids: number[]) => {
@@ -562,7 +691,23 @@ export default function Home() {
     if (!uniqueIds.length) return false;
     if (!window.confirm(`确定删除选中的 ${uniqueIds.length} 个收藏吗？删除后无法恢复。`)) return false;
     const results = await Promise.allSettled(uniqueIds.map(async (id) => {
-      if (persistedMediaIds.current.has(id)) await removeMedia(id);
+      const queueId = mediaLocalIds.current.get(id) || id;
+      mediaSaveVersions.current.set(queueId, (mediaSaveVersions.current.get(queueId) || 0) + 1);
+      const pending = mediaSaveQueues.current.get(queueId);
+      if (pending) await pending;
+      const persistedId = mediaServerIds.current.get(queueId)
+        || (persistedMediaIds.current.has(id) ? id : persistedMediaIds.current.has(queueId) ? queueId : undefined);
+      if (persistedId) {
+        await removeMedia(persistedId);
+        persistedMediaIds.current.delete(persistedId);
+      }
+      persistedMediaIds.current.delete(id);
+      persistedMediaIds.current.delete(queueId);
+      mediaServerIds.current.delete(queueId);
+      mediaLocalIds.current.delete(id);
+      mediaLocalIds.current.delete(queueId);
+      if (persistedId) mediaLocalIds.current.delete(persistedId);
+      mediaSaveVersions.current.delete(queueId);
       return id;
     }));
     const succeeded = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
@@ -630,36 +775,39 @@ export default function Home() {
     const mediaType = addForm.mediaType;
     const isTmdb = result.source === "tmdb" && (mediaType === "movie" || mediaType === "tv");
     const isVndb = result.source === "vndb" && mediaType === "game";
+    const isBangumi = result.source === "bangumi";
+    const provider = result.source as "bangumi" | "vndb" | "tmdb" | "anilist" | "mangadex" | "google_books" | "open_library" | "ndl";
     const selectedId = result.tmdbId || result.id;
+    const externalId = result.externalId || result.metadata?.sources?.[result.source] || (isBangumi ? String(result.id) : isTmdb ? undefined : String(result.id));
     setAddForm((form) => ({
       ...form,
       title: result.title,
       jp: result.originalTitle || result.jp,
       total: result.total || (form.mediaType === "game" ? 100 : form.mediaType === "movie" ? 1 : 12),
       image: result.coverImage || result.image || (form.mediaType === "anime" ? highResCoverUrl(result.jp || result.title) : ""),
-      note: result.overview || form.note,
+      note: form.note,
       globalScore: result.rating && result.rating > 0 ? result.rating : form.globalScore,
-      source: isTmdb ? "manual" : isVndb ? "vndb" : "bangumi",
-      subjectId: isTmdb ? undefined : result.id,
-      metadata: normalizeMediaMetadata({ ...form.metadata, ...(result.metadata || {}), ...(isTmdb ? { tmdbId: selectedId, backdropImage: result.backdropImage, overview: result.overview, originalTitle: result.originalTitle, genres: result.genres, year: result.year, provider: "tmdb" } : isVndb ? { vndbId: result.externalId || result.metadata?.vndbId, vndbUrl: result.externalId ? `https://vndb.org/${result.externalId}` : result.metadata?.vndbUrl, provider: "vndb" } : {}) }),
+      source: isTmdb ? "manual" : provider,
+      subjectId: isBangumi ? result.id : undefined,
+      metadata: normalizeMediaMetadata({ ...form.metadata, ...(result.metadata || {}), sources: { ...(form.metadata.sources || {}), ...(result.metadata?.sources || {}), ...(externalId ? { [provider]: externalId } : {}) }, overview: result.overview || result.metadata?.overview || form.metadata.overview, overviewOverride: false, ...(isTmdb ? { tmdbId: selectedId, backdropImage: result.backdropImage, originalTitle: result.originalTitle, genres: result.genres, year: result.year, provider: "tmdb" } : isVndb ? { vndbId: result.externalId || result.metadata?.vndbId, vndbUrl: result.externalId ? `https://vndb.org/${result.externalId}` : result.metadata?.vndbUrl, provider: "vndb" } : {}) }),
     }));
     setQuery("");
     setSearchResults([]);
-    if (!isTmdb && !isVndb) return;
+    if (isBangumi === false && !isTmdb && !isVndb && !externalId) return;
     try {
-      const detail = await fetchSubjectDetail<SearchResult & { summary?: string; score?: number; metadata?: AddForm["metadata"] }>(selectedId, undefined, mediaType, isVndb ? { provider: "vndb", externalId: result.externalId || result.metadata?.vndbId } : {});
-      setAddForm((form) => ({
+      const detail = await fetchSubjectDetail<SearchResult & { summary?: string; score?: number; metadata?: AddForm["metadata"] }>(selectedId, undefined, mediaType, isTmdb ? { provider: "tmdb", externalId: String(selectedId) } : isBangumi ? {} : { provider, externalId });
+      setAddForm((form) => form.mediaType === mediaType ? {
         ...form,
         title: detail.title || form.title,
         jp: detail.originalTitle || detail.jp || form.jp,
         total: detail.total || form.total,
         image: detail.coverImage || detail.image || form.image,
-        note: detail.overview || detail.summary || form.note,
+        note: form.note,
         globalScore: detail.rating && detail.rating > 0 ? detail.rating : detail.score && detail.score > 0 ? detail.score : form.globalScore,
-        metadata: normalizeMediaMetadata({ ...form.metadata, ...(detail.metadata || {}), ...(isVndb ? { vndbId: detail.externalId || result.externalId || result.metadata?.vndbId, vndbUrl: result.externalId ? `https://vndb.org/${result.externalId}` : result.metadata?.vndbUrl, provider: "vndb" } : { tmdbId: detail.tmdbId || selectedId, backdropImage: detail.backdropImage, overview: detail.overview || detail.summary, originalTitle: detail.originalTitle || detail.jp, genres: detail.genres, provider: "tmdb" }) }),
-      }));
+        metadata: normalizeMediaMetadata({ ...form.metadata, ...(detail.metadata || {}), sources: { ...(form.metadata.sources || {}), ...(detail.metadata?.sources || {}), ...(externalId ? { [provider]: externalId } : {}) }, overview: detail.overview || detail.summary || form.metadata.overview, overviewOverride: false, ...(isVndb ? { vndbId: detail.externalId || result.externalId || result.metadata?.vndbId, vndbUrl: result.externalId ? `https://vndb.org/${result.externalId}` : result.metadata?.vndbUrl, provider: "vndb" } : isTmdb ? { tmdbId: detail.tmdbId || selectedId, backdropImage: detail.backdropImage, originalTitle: detail.originalTitle || detail.jp, genres: detail.genres, provider: "tmdb" } : {}) }),
+      } : form);
     } catch {
-      setToast(`${isVndb ? "VNDB" : "TMDB"} 详情读取失败，已保留搜索结果`);
+      setToast(`${provider} 详情读取失败，已保留搜索结果`);
     }
   };
   const openDeviceEditor = (device: Device | null) => {
@@ -668,8 +816,9 @@ export default function Home() {
       name: device.name, category: device.category, subCategory: device.subCategory, status: device.status,
       price: device.price != null ? String(device.price) : "", purchaseDate: device.purchaseDate || "",
       receiptImage: device.receiptImage, coverImage: device.coverImage, tags: device.tags.join("，"),
+      coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom,
       rating: device.rating != null ? String(device.rating) : "", review: device.review,
-    } : { name: "", category: deviceCategories[0]?.id || "audio", subCategory: "", status: "active", price: "", purchaseDate: "", receiptImage: "", coverImage: "", tags: "", rating: "", review: "" });
+    } : { name: "", category: deviceCategories[0]?.id || "audio", subCategory: "", status: "active", price: "", purchaseDate: "", receiptImage: "", coverImage: "", coverPositionX: 50, coverPositionY: 50, coverZoom: 100, tags: "", rating: "", review: "" });
     setModal("device");
   };
   const openDeviceCategoryManager = () => {
@@ -690,6 +839,9 @@ export default function Home() {
       purchaseDate: deviceForm.purchaseDate || null,
       receiptImage: deviceForm.receiptImage.trim(),
       coverImage: deviceForm.coverImage.trim(),
+      coverPositionX: deviceForm.coverPositionX,
+      coverPositionY: deviceForm.coverPositionY,
+      coverZoom: deviceForm.coverZoom,
       tags: deviceForm.tags.split(/[,，、\s]+/).map((tag) => tag.trim()).filter(Boolean).slice(0, 12),
       rating: deviceForm.rating !== "" && Number.isInteger(Number(deviceForm.rating)) ? Math.min(10, Math.max(1, Number(deviceForm.rating))) : null,
       review: deviceForm.review.trim(),
@@ -699,10 +851,10 @@ export default function Home() {
     const localId = device.id;
     setDevices((items) => isNew ? [device, ...items] : items.map((item) => item.id === localId ? device : item));
     closeSecondary();
-    setToast(isNew ? "设备已加入装备库" : "设备信息已更新");
+    setToast(isNew ? "设备已加入藏品库" : "设备信息已更新");
     if (!devicesPersistable) return;
     try {
-      const payload = await saveDevice({ id: deviceDraft?.id, name: device.name, category: device.category, subCategory: device.subCategory, status: device.status, price: device.price, currency: device.currency, purchaseDate: device.purchaseDate, receiptImage: device.receiptImage, coverImage: device.coverImage, tags: device.tags, rating: device.rating, review: device.review });
+      const payload = await saveDevice({ id: deviceDraft?.id, name: device.name, category: device.category, subCategory: device.subCategory, status: device.status, price: device.price, currency: device.currency, purchaseDate: device.purchaseDate, receiptImage: device.receiptImage, coverImage: device.coverImage, coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom, tags: device.tags, rating: device.rating, review: device.review });
       if (payload?.device) setDevices((items) => items.map((item) => item.id === localId ? normalizeLibraryDevice(payload.device) : item));
     } catch {
       setDevicesPersistable(false);
@@ -711,7 +863,7 @@ export default function Home() {
   };
   const deleteDevice = async (id: number) => {
     setDevices((items) => items.filter((item) => item.id !== id));
-    setToast("设备已移出装备库");
+    setToast("设备已移出藏品库");
     if (!devicesPersistable) return;
     try {
       await removeDevice(id);
@@ -750,11 +902,14 @@ export default function Home() {
     const isVisual = addForm.mediaType === "visual";
     const isMovie = addForm.mediaType === "movie";
     const isVideo = addForm.mediaType === "video";
-    const metadata = normalizeMediaMetadata({ ...addForm.metadata, videoSource: isVideo ? addForm.source.trim() : addForm.metadata.videoSource });
-    const newItem: Anime = { id: Date.now(), title: addForm.title.trim(), jp: addForm.jp || "", note: addForm.note || "手动加入月下集", progress: 0, total: isMusic || isVisual || isMovie || isVideo ? 1 : addForm.total || (addForm.mediaType === "game" ? 100 : 12), status: addForm.status, kind: "coral", score: undefined, image: isVisual ? undefined : addForm.image.trim() || (addForm.mediaType === "anime" ? highResCoverUrl(addForm.jp || addForm.title) : ""), thumbnail: isVisual || isVideo ? addForm.thumbnail.trim() : undefined, subjectId: isVisual || addForm.mediaType === "tv" || isMovie || isVideo ? undefined : addForm.subjectId, mediaType: addForm.mediaType, unit: setting.unit, globalScore: addForm.globalScore, source: isVideo ? "manual" : normalizeMediaSource(addForm.source, addForm.subjectId ? "bangumi" : "manual"), collection: addForm.collection || "", tags: splitTags(addForm.tags), musicAlbum: isMusic ? addForm.musicAlbum.trim() : "", musicArtist: isMusic ? addForm.musicArtist.trim() : "", lyricist: isMusic ? addForm.lyricist.trim() : "", composer: isMusic ? addForm.composer.trim() : "", animeSong: isMusic && addForm.animeSong, visualSubtype: isVisual ? addForm.visualSubtype : "other", videoSubtype: isVideo ? normalizeVideoSubtype(addForm.videoSubtype) : "other", sourceUrl: isVisual || isVideo ? addForm.sourceUrl.trim() : "", pixivPid: isVisual ? addForm.pixivPid.trim() : "", author: isVisual ? addForm.author.trim() : "", twitterSource: isVisual ? addForm.twitterSource.trim() : "", characterTags: isVisual ? addForm.characterTags.split(/[,，、\s]+/).map((tag) => tag.trim()).filter(Boolean).slice(0, 30) : [], metadata, updatedAt: Date.now() };
+    const galleryImages = isVisual ? normalizeMediaImages(addForm.images, addForm.thumbnail.trim()) : [];
+    const galleryCover = mediaImageUrl(galleryImages.find((image) => image.isCover) || galleryImages[0]);
+    const metadata = normalizeMediaMetadata({ ...addForm.metadata, ...(addForm.mediaType === "light_novel" && !addForm.metadata.bookKind ? { bookKind: "light_novel" } : {}), videoSource: isVideo ? addForm.source.trim() : addForm.metadata.videoSource });
+    const personalTags = splitTags([addForm.tags, addForm.characterTags].filter(Boolean).join("，"));
+    const newItem: Anime = { id: Date.now(), title: addForm.title.trim(), jp: addForm.jp || "", note: addForm.note || "手动加入月下集", progress: 0, total: isMusic || isVisual || isMovie || isVideo ? 1 : addForm.total || (addForm.mediaType === "game" ? 100 : 12), status: addForm.status, kind: "coral", score: undefined, image: isVisual ? undefined : addForm.image.trim() || (addForm.mediaType === "anime" && addForm.subjectId ? highResCoverUrl(addForm.jp || addForm.title) : ""), thumbnail: isVisual ? galleryCover : isVideo ? addForm.thumbnail.trim() : undefined, images: isVisual ? galleryImages : undefined, subjectId: isVisual || addForm.mediaType === "tv" || isMovie || isVideo ? undefined : addForm.subjectId, mediaType: addForm.mediaType, unit: setting.unit, globalScore: addForm.globalScore, source: isVideo ? "manual" : normalizeMediaSource(addForm.source, addForm.subjectId ? "bangumi" : "manual"), collection: addForm.collection || "", tags: personalTags, musicAlbum: isMusic ? addForm.musicAlbum.trim() : "", musicArtist: isMusic ? addForm.musicArtist.trim() : "", lyricist: isMusic ? addForm.lyricist.trim() : "", composer: isMusic ? addForm.composer.trim() : "", animeSong: isMusic && addForm.animeSong, visualSubtype: isVisual ? addForm.visualSubtype : "other", videoSubtype: isVideo ? normalizeVideoSubtype(addForm.videoSubtype) : "other", sourceUrl: isVisual || isVideo ? addForm.sourceUrl.trim() : "", pixivPid: isVisual ? addForm.pixivPid.trim() : "", author: isVisual ? addForm.author.trim() : "", twitterSource: isVisual ? addForm.twitterSource.trim() : "", characterTags: [], metadata, updatedAt: Date.now() };
     setAnime((items) => [...items, newItem]);
     void persistAnime(newItem);
-    closeSecondary(); setAddForm({ title: "", jp: "", total: 12, status: "watching", note: "", image: "", thumbnail: "", mediaType: "anime", collection: "", tags: "", musicAlbum: "", musicArtist: "", lyricist: "", composer: "", source: "", animeSong: false, visualSubtype: "other", videoSubtype: "other", sourceUrl: "", pixivPid: "", author: "", twitterSource: "", characterTags: "", metadata: normalizeMediaMetadata() }); setQuery(""); setToast(isMusic ? "单曲已加入月下集" : isVisual ? "视觉收藏已加入画廊" : isVideo ? "视频已加入月下集" : "已加入月下集");
+    closeSecondary(); setAddForm({ title: "", jp: "", total: 12, status: "watching", note: "", image: "", thumbnail: "", images: [], mediaType: "anime", collection: "", tags: "", musicAlbum: "", musicArtist: "", lyricist: "", composer: "", source: "", animeSong: false, visualSubtype: "other", videoSubtype: "other", sourceUrl: "", pixivPid: "", author: "", twitterSource: "", characterTags: "", metadata: normalizeMediaMetadata() }); setQuery(""); setToast(isMusic ? "单曲已加入月下集" : isVisual ? "视觉收藏已加入画廊" : isVideo ? "视频已加入月下集" : "已加入月下集");
   };
   const createCollection = () => {
     const name = collectionName.trim();
@@ -768,16 +923,23 @@ export default function Home() {
   };
   const selectCollection = (name: string) => setActiveCollection(name);
   const toggleCalendarTracking = (entry: CalendarEntry) => {
-    const existing = anime.find((item) => (entry.subjectId && item.subjectId === entry.subjectId) || item.title === entry.title || (item.jp && item.jp === entry.jp));
+    const existing = anime.find((item) => calendarEntryMatches(item, entry));
     if (existing) {
       setAnime((items) => items.filter((item) => item.id !== existing.id));
-      void removePersistedAnime(existing.id);
+      void removePersistedAnime(existing.id).then((removed) => {
+        if (!removed) setAnime((items) => items.some((item) => item.id === existing.id) ? items : [...items, existing]);
+      });
       setToast("已取消追更");
       return;
     }
+    const providers = calendarSourceTokens(entry.source);
+    const sourceIds = { ...(entry.sourceIds || {}) };
+    if (entry.subjectId && providers.includes("bangumi")) sourceIds.bangumi ||= String(entry.subjectId);
+    const primaryProvider = providers[0] || "manual";
+    const source = primaryProvider === "bangumi" || primaryProvider === "anilist" || primaryProvider === "animeschedule" ? primaryProvider : "manual";
     const newItem: Anime = {
-      id: Date.now(), title: entry.title, jp: entry.jp, subjectId: entry.subjectId, note: `从星期${entry.day}放送表加入`, progress: 0, total: 12,
-      status: "watching", kind: "coral", image: entry.coverUrl || highResCoverUrl(entry.coverQuery), next: entry.meta.split("·").slice(0, 2).join("·"), mediaType: "anime", unit: "集", source: "bangumi", collection: "", tags: ["放送追更"], updatedAt: Date.now(),
+      id: Date.now(), title: entry.title, jp: entry.jp, subjectId: source === "bangumi" ? entry.subjectId : undefined, note: `从星期${entry.day}放送表加入`, progress: 0, total: 12,
+      status: "watching", kind: "coral", image: entry.coverUrl || highResCoverUrl(entry.coverQuery), next: entry.meta.split("·").slice(0, 2).join("·"), mediaType: "anime", unit: "集", source, collection: "", tags: ["放送追更"], metadata: normalizeMediaMetadata({ sources: sourceIds }), updatedAt: Date.now(),
     };
     setAnime((items) => [...items, newItem]);
     void persistAnime(newItem);
@@ -789,8 +951,11 @@ export default function Home() {
     closeSecondary(); setToast("修改已保存");
   };
   const removeAnime = (id: number) => {
+    const removed = anime.find((item) => item.id === id);
     setAnime((items) => items.filter((item) => item.id !== id));
-    void removePersistedAnime(id);
+    void removePersistedAnime(id).then((deleted) => {
+      if (!deleted && removed) setAnime((items) => items.some((item) => item.id === id) ? items : [...items, removed]);
+    });
     closeSecondary(); setToast("条目已移除");
   };
   const uploadBackground = async (file?: File) => {
@@ -833,7 +998,7 @@ export default function Home() {
     const payload = await loadMedia();
     const loaded = payload.subjects.map((item, index) => normalizeLoadedAnime(item as Partial<Anime> & Record<string, unknown>, index));
     persistedMediaIds.current = new Set(loaded.map((item) => item.id));
-    setAnime(loaded.length ? loaded : seedAnime);
+    setAnime(loaded);
     return loaded.length;
   };
   const syncBangumiAccount = async (direction: "pull" | "push", types: MediaType[]) => {
@@ -842,10 +1007,10 @@ export default function Home() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ direction, types }),
     });
-    const payload = await response.json().catch(() => ({})) as { error?: string; details?: string; synced?: number; failed?: number };
+    const payload = await response.json().catch(() => ({})) as { error?: string; details?: string; synced?: number; failed?: number; errors?: Array<{ error?: string }> };
     if (!response.ok) throw new Error([payload.error || "Bangumi 账号同步失败", payload.details].filter(Boolean).join("："));
     if (direction === "pull") await reloadMediaLibrary();
-    return { synced: Number(payload.synced) || 0, failed: Number(payload.failed) || 0 };
+    return { synced: Number(payload.synced) || 0, failed: Number(payload.failed) || 0, failureReason: payload.errors?.[0]?.error || "" };
   };
   const runSync = async (target: SyncTarget) => {
     if (syncing) return;
@@ -857,7 +1022,7 @@ export default function Home() {
       } else {
         const direction = target === "bangumi_pull" ? "pull" : "push";
         const result = await syncBangumiAccount(direction, bangumiSyncTypes);
-        setToast(`${direction === "pull" ? "Bangumi 导入" : "Bangumi 写回"}完成：成功 ${result.synced} 条${result.failed ? `，失败 ${result.failed} 条` : ""}`);
+        setToast(`${direction === "pull" ? "Bangumi 导入" : "Bangumi 写回"}完成：成功 ${result.synced} 条${result.failed ? `，失败 ${result.failed} 条${result.failureReason ? `（${result.failureReason}）` : ""}` : ""}`);
       }
     } catch (error) {
       setToast(error instanceof Error ? error.message : "同步失败，请稍后重试");
@@ -871,21 +1036,21 @@ export default function Home() {
   return <main className={`app-shell font-${font} ${closingModal ? "secondary-closing" : ""}`} style={{ "--softness": softness / 100, "--primary": primaryColor, "--accent": accentColor } as React.CSSProperties}>
     {backgroundVersion > 0 && <div className="custom-background" style={{ backgroundImage: `url("${customBackgroundUrl(backgroundVersion)}")` }} />}
     <header className="topbar"><div className="topbar-inner">
-      <button className="brand" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setActiveCollection("all"); setActiveTag("all"); }}><i />月下集</button>
-      <nav className="desktop-nav" aria-label="一级导航"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>装备库</button></nav>
+      <button className="brand" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setIncludeStandaloneMedia(false); setActiveCollection("all"); setActiveTags([]); }}><i />月下集</button>
+      <nav className="desktop-nav" aria-label="一级导航"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>藏品库</button></nav>
       <label className="library-search"><span>⌕</span><input value={listQuery} onChange={(event) => setListQuery(event.target.value)} placeholder={activeView === "devices" ? "搜索设备、标签或子类" : "搜索我的收藏"} /></label>
       <div className="header-actions"><button className="icon-button health-dot" onClick={() => setModal("connectivity")} aria-label="连通性检查"><i /></button><button className={`quiet-button sync-trigger ${modal === "sync" ? "open" : ""}`} onClick={() => modal === "sync" ? closeSecondary() : setModal("sync")} aria-expanded={modal === "sync"}><span className="button-label">同步</span><i className="sync-chevron" aria-hidden="true" /></button><button className="primary-button add-trigger" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><span className="plus-icon" aria-hidden="true">＋</span><span className="button-label">添加</span></button><button className="avatar" onClick={() => setModal("settings")} aria-label="打开偏好设置">{avatarUrl ? <img src={avatarUrl} alt="自定义头像" /> : "泽"}</button>{modal === "sync" && <><button className="popover-dismiss" onClick={() => closeSecondary()} aria-label="关闭同步菜单" /><SyncMenu close={() => closeSecondary()} syncing={syncing} open={openSyncDialog} /></>}</div>
     </div></header>
-    <nav className="mobile-view-tabs" aria-label="一级导航"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>装备库</button></nav>
+    <nav className="mobile-view-tabs" aria-label="一级导航"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>藏品库</button></nav>
 
     <div className="page-wrap">
         <CollectionSummary beijingTime={beijingTime} activeCollectionTotal={activeCollectionTotal} activeMediaCounts={activeMediaCounts} activeDeviceCount={activeDeviceCount} totalInvestment={totalInvestment} musicTotal={musicTotal} />
       {activeView === "acg" ? <MediaLibrary
         anime={anime} visibleAnime={visibleAnime} collections={collections} activeStatus={activeStatus} setActiveStatus={setActiveStatus} statusCounts={statusCounts}
-        activeMedia={activeMedia} setActiveMedia={setActiveMedia} mediaOrder={mediaOrder} mediaDragIndex={mediaDragIndex} moveMediaTab={moveMediaTab}
+        activeMedia={activeMedia} setActiveMedia={setActiveMedia} includeStandaloneMedia={includeStandaloneMedia} setIncludeStandaloneMedia={setIncludeStandaloneMedia} mediaOrder={mediaOrder} mediaDragIndex={mediaDragIndex} moveMediaTab={moveMediaTab}
         activeCollection={activeCollection} setActiveCollection={setActiveCollection} selectCollection={selectCollection} openCollectionManager={() => setModal("collection_manager")}
         openAdd={() => setModal("add")} openCollection={() => setModal("collection")} openVisualSubtypeManager={openVisualSubtypeManager} acgLayout={acgLayout} setAcgLayout={setAcgLayout}
-        ratingScope={ratingScope} setRatingScope={setRatingScope} scoreFloor={scoreFloor} setScoreFloor={setScoreFloor} activeTag={activeTag} setActiveTag={setActiveTag} tagPreferences={tagPreferences} setTagPreferences={setTagPreferences} hideDropped={hideDropped} setHideDropped={setHideDropped} sortMode={sortMode} setSortMode={setSortMode}
+        ratingScope={ratingScope} setRatingScope={setRatingScope} scoreFloor={scoreFloor} setScoreFloor={setScoreFloor} activeTags={activeTags} setActiveTags={setActiveTags} tagPreferences={tagPreferences} setTagPreferences={setTagPreferences} hideDropped={hideDropped} setHideDropped={setHideDropped} sortMode={sortMode} setSortMode={setSortMode}
         musicFacets={musicFacets} musicAlbum={musicAlbum} setMusicAlbum={setMusicAlbum} musicArtist={musicArtist} setMusicArtist={setMusicArtist} musicLyricist={musicLyricist} setMusicLyricist={setMusicLyricist} animeSongsOnly={animeSongsOnly} setAnimeSongsOnly={setAnimeSongsOnly} visualSubtype={visualSubtype} setVisualSubtype={setVisualSubtype} visualSubtypeLabels={visualSubtypeLabels} videoSubtype={videoSubtype} setVideoSubtype={setVideoSubtype} videoSubtypeLabels={videoSubtypeLabels} openVideoSubtypeManager={openVideoSubtypeManager}
         onAdjust={adjust} onDetails={openDetails} onRate={rateAnime} onBatchDelete={deleteSelectedAnime} titleMode={titleMode} openCalendar={openCalendar} toggleCalendarTracking={toggleCalendarTracking} airingSchedules={airingSchedules} airingBySubjectId={airingBySubjectId}
       /> : <DeviceLibrary
@@ -893,7 +1058,7 @@ export default function Home() {
       />}
     </div>
 
-    <nav className="mobile-nav"><button className={activeView === "acg" ? "active" : ""} onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); }}><i>◇</i><span>首页</span></button><button onClick={() => openCalendar()}><i>◷</i><span>日历</span></button><button className="mobile-nav-add" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><i>＋</i><span>添加</span></button><button onClick={() => { setActiveView("acg"); setModal("add"); }}><i>⌕</i><span>搜索</span></button><button onClick={() => setModal("settings")}><i>○</i><span>我的</span></button></nav>
+    <nav className="mobile-nav"><button className={activeView === "acg" ? "active" : ""} onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); }}><i>◇</i><span>首页</span></button><button onClick={() => openCalendar()}><i>◷</i><span>日历</span></button><button className="mobile-nav-add" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><i>＋</i><span>添加</span></button><button onClick={() => setModal("sync")}><i>↻</i><span>同步</span></button><button onClick={() => setModal("settings")}><i>○</i><span>我的</span></button></nav>
     {modal === "add" && <AddModal query={query} setQuery={(value) => { setQuery(value); if (value.trim().length < 2) { setSearchResults([]); setSearching(false); } }} search={triggerSearch} searching={searching} results={searchResults} choose={chooseSearch} form={addForm} setForm={setAddForm} collections={collections} close={() => closeSecondary()} submit={addAnime} uploadImage={uploadImageAsset} thumbnailUploading={thumbnailUploading} visualSubtypeLabels={visualSubtypeLabels} openVisualSubtypeManager={(returnTo) => openVisualSubtypeManager(returnTo || "add")} videoSubtypeLabels={videoSubtypeLabels} openVideoSubtypeManager={(returnTo) => openVideoSubtypeManager(returnTo || "add")} />}
     {modal === "collection" && <CollectionModal name={collectionName} setName={setCollectionName} close={() => closeSecondary()} submit={createCollection} />}
     {modal === "collection_manager" && <CollectionManagerModal collections={collections} close={() => closeSecondary()} save={(next) => { const removed = new Set(collections.filter((name) => !next.includes(name))); setCollections(next); if (removed.size) { const affected = anime.filter((item) => item.collection && removed.has(item.collection)); setAnime((items) => items.map((item) => item.collection && removed.has(item.collection) ? { ...item, collection: "", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, collection: "", updatedAt: Date.now() }); }); } if (activeCollection !== "all" && !next.includes(activeCollection)) setActiveCollection("all"); closeSecondary(); setToast("合集顺序已保存"); }} />}
@@ -913,7 +1078,7 @@ export default function Home() {
     {modal === "connectivity" && <ConnectivityModal close={() => closeSecondary()} />}
     {modal === "calendar" && <CalendarModal initialDay={calendarDay} close={() => closeSecondary()} titleMode={titleMode} anime={anime} airingSchedules={airingSchedules} toggle={toggleCalendarTracking} refreshSchedules={refreshAiringSchedules} />}
     {modal === "complete" && completionId !== null && <CompletionModal item={anime.find((item) => item.id === completionId)} close={() => closeSecondary()} confirm={completeAnime} />}
-    {modal === "detail" && detailId !== null && <DetailDrawer key={detailId} item={anime.find((item) => item.id === detailId)} collections={collections} close={() => closeSecondary()} save={saveDetails} remove={removeAnime} uploadImage={uploadImageAsset} imageUploading={thumbnailUploading} visualSubtypeLabels={visualSubtypeLabels} videoSubtypeLabels={videoSubtypeLabels} syncSettings={syncSettings} />}
+    {modal === "detail" && detailId !== null && anime.find((item) => item.id === detailId) && <DetailDrawer key={detailId} item={anime.find((item) => item.id === detailId)!} collections={collections} close={() => closeSecondary()} save={saveDetails} remove={removeAnime} uploadImage={uploadImageAsset} imageUploading={thumbnailUploading} visualSubtypeLabels={visualSubtypeLabels} videoSubtypeLabels={videoSubtypeLabels} syncSettings={syncSettings} />}
     {modal === "visual_subtypes" && <VisualSubtypeModal labels={visualSubtypeLabels} close={closeVisualSubtypeManager} save={(labels) => { const returnTo = visualSubtypeReturn; const nextLabels = normalizeVisualSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVisualSubtypeLabels(nextLabels); setVisualSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype)); setAnime((items) => items.map((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype) ? { ...item, visualSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, visualSubtype: "other", updatedAt: Date.now() }); }); setVisualSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("画廊子类型已保存"); }} />}
     {modal === "video_subtypes" && <VideoSubtypeModal labels={videoSubtypeLabels} close={closeVideoSubtypeManager} save={(labels) => { const returnTo = videoSubtypeReturn; const nextLabels = normalizeVideoSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVideoSubtypeLabels(nextLabels); setVideoSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype)); setAnime((items) => items.map((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype) ? { ...item, videoSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, videoSubtype: "other", updatedAt: Date.now() }); }); setVideoSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("视频子分类已保存"); }} />}
     {modal === "device" && deviceForm && <DeviceModal form={deviceForm} setForm={setDeviceForm} device={deviceDraft} categories={deviceCategories} subCategories={deviceSubCategories} close={() => closeSecondary()} submit={() => void submitDevice()} />}

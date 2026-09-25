@@ -31,8 +31,14 @@ async function writeDevice(request: Request, identity: AgentIdentity, action: "c
         await finishAgentOperation(reservation.id, 404, payload);
         return agentJson(payload, 404);
       }
-      await db.update(userDevices).set(next).where(and(eq(userDevices.id, id), eq(userDevices.userKey, identity.userKey)));
-      row = { ...existing, ...next, id };
+      const update = {
+        ...next,
+        coverPositionX: body.coverPositionX === undefined ? existing.coverPositionX : next.coverPositionX,
+        coverPositionY: body.coverPositionY === undefined ? existing.coverPositionY : next.coverPositionY,
+        coverZoom: body.coverZoom === undefined ? existing.coverZoom : next.coverZoom,
+      };
+      await db.update(userDevices).set(update).where(and(eq(userDevices.id, id), eq(userDevices.userKey, identity.userKey)));
+      row = { ...existing, ...update, id };
       status = 200;
     } else {
       const [created] = await db.insert(userDevices).values({ ...next, userKey: identity.userKey }).returning();

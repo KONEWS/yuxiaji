@@ -18,7 +18,9 @@ export type BangumiSubjectSummary = {
 
 export type BangumiSubjectDetail = BangumiSubjectSummary & {
   summary?: string;
+  short_summary?: string;
   platform?: string;
+  score?: number;
   rating?: { score?: number; total?: number; rank?: number };
   collection?: { rank?: number };
   tags?: Array<{ name?: string; count?: number }>;
@@ -36,6 +38,7 @@ export type BangumiCollection = {
   ep_status?: number;
   vol_status?: number;
   updated_at?: string;
+  subject?: BangumiSubjectDetail;
 };
 
 export type BangumiUser = {
@@ -104,8 +107,28 @@ function requestHeaders(options: BangumiRequestOptions = {}) {
   return headers;
 }
 
+const RETRYABLE_BANGUMI_STATUS = new Set([429, 500, 502, 503, 504]);
+
+async function bangumiFetch(url: string, init: RequestInit, options: BangumiRequestOptions = {}) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(url, { ...init, signal: options.signal || AbortSignal.timeout(8000) });
+      if (!RETRYABLE_BANGUMI_STATUS.has(response.status) || attempt === 2) return response;
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 2500) : 400 * (2 ** attempt);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2 || options.signal?.aborted) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 400 * (2 ** attempt)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new BangumiApiError("Bangumi 请求失败");
+}
+
 async function readJson<T>(url: string, init: RequestInit, options: BangumiRequestOptions = {}) {
-  const response = await fetch(url, { ...init, signal: options.signal || AbortSignal.timeout(8000) });
+  const response = await bangumiFetch(url, init, options);
   if (!response.ok) {
     let detail = "";
     try {
@@ -120,7 +143,7 @@ async function readJson<T>(url: string, init: RequestInit, options: BangumiReque
 }
 
 async function requestNoContent(url: string, init: RequestInit, options: BangumiRequestOptions = {}) {
-  const response = await fetch(url, { ...init, signal: options.signal || AbortSignal.timeout(8000) });
+  const response = await bangumiFetch(url, init, options);
   if (!response.ok) {
     let detail = "";
     try {
@@ -148,11 +171,6 @@ export async function searchBangumiSubjects(query: string, mediaType = "anime", 
   return payload.data || [];
 }
 
-export async function resolveBangumiSubjectId(query: string, mediaType = "anime", options: BangumiRequestOptions = {}) {
-  const results = await searchBangumiSubjects(query, mediaType, options);
-  return results[0]?.id;
-}
-
 export async function getBangumiSubject(id: number, options: BangumiRequestOptions = {}) {
   return readJson<BangumiSubjectDetail>(`${BANGUMI_API_BASE}/subjects/${id}`, {
     headers: requestHeaders(options),
@@ -164,17 +182,6 @@ export async function getBangumiCurrentUser(options: BangumiRequestOptions = {})
   return readJson<BangumiUser>(`${BANGUMI_API_BASE}/me`, {
     headers: requestHeaders(options),
   }, options);
-}
-
-export async function getBangumiUserCollections(username: string, options: BangumiRequestOptions = {}) {
-  const name = username.trim().slice(0, 80);
-  if (!name) throw new BangumiApiError("缺少 Bangumi 用户名", 400);
-  // Bangumi's documented default_query_limit has a maximum of 50. Sending
-  // 100 returns a validation error before any collection data is returned.
-  const payload = await readJson<{ data?: BangumiCollection[] }>(`${BANGUMI_API_BASE}/users/${encodeURIComponent(name)}/collections?limit=50&offset=0`, {
-    headers: requestHeaders(options),
-  }, options);
-  return payload.data || [];
 }
 
 /** Fetch the complete collection in bounded pages for account synchronization. */
@@ -230,11 +237,11 @@ export function subjectTitle(subject: BangumiSubjectSummary) {
 }
 
 export function subjectScore(subject: BangumiSubjectDetail) {
-  return Number(subject.rating?.score) || 0;
+  return Number(subject.rating?.score ?? subject.score) || 0;
 }
 
 export function subjectTags(subject: BangumiSubjectDetail) {
-  return (subject.tags || []).sort((a, b) => (b.count || 0) - (a.count || 0)).map((tag) => tag.name || "").filter(Boolean).slice(0, 10);
+  return [...(subject.tags || [])].sort((a, b) => (b.count || 0) - (a.count || 0)).map((tag) => tag.name || "").filter(Boolean).slice(0, 10);
 }
 
 /** Read a future user token from an explicit app header; no OAuth flow is involved. */

@@ -32,7 +32,9 @@ export async function POST(request: Request) {
   try {
     const body = await request.json() as Record<string, unknown>;
     const token = typeof body.accessToken === "string" ? body.accessToken.trim() : typeof body.token === "string" ? body.token.trim() : "";
-    const validityDays = Number(body.tokenValidityDays);
+    // Older clients did not send a validity period. Keep that route usable
+    // while new clients can still mirror the lifetime chosen on Bangumi.
+    const validityDays = body.tokenValidityDays === undefined ? 30 : Number(body.tokenValidityDays);
     const allowedValidityDays = new Set([7, 14, 30, 90, 180, 365]);
     if (!token || token.length > 512) return Response.json({ error: "请填写有效的 Bangumi Access Token" }, { status: 400 });
     if (!allowedValidityDays.has(validityDays)) return Response.json({ error: "请选择与 Bangumi 令牌一致的有效期" }, { status: 400 });

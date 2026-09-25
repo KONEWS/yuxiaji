@@ -3,7 +3,7 @@ import { getDb } from "../../../../db";
 import { adminAccount, adminSessions } from "../../../../db/schema";
 import { createBackupCodes, csrfFailure, generateTotpSecret, getAdminSession, hashPassword, listSessions, publicAccount, requireAdminSession, sessionDurations, totpUri, verifyPassword, verifyTotp, writeAuthLog, type AdminAccount } from "../../../lib/admin-auth";
 
-const allowedDurations = new Set(sessionDurations());
+const allowedDurations = new Set<number>(sessionDurations());
 
 function requestFieldNames(body: Record<string, unknown>) {
   return Object.keys(body).sort();
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
   try {
     if (action === "duration") {
       const duration = Number(body.sessionDuration);
-      if (!allowedDurations.has(duration as never)) return Response.json({ error: "不支持的 Session 时长" }, { status: 400 });
+      if (!allowedDurations.has(duration)) return Response.json({ error: "不支持的 Session 时长" }, { status: 400 });
       await getDb().update(adminAccount).set({ sessionDuration: duration, updatedAt: new Date() }).where(eq(adminAccount.id, current.account.id));
       return Response.json({ ok: true, sessionDuration: duration });
     }
@@ -88,11 +88,7 @@ export async function POST(request: Request) {
     }
     if (action === "2fa-enable") {
       const check = await sensitiveCheck(request, current.account, { ...body, currentPassword: body.currentPassword || "" });
-      // During setup, the account does not yet have 2FA, so only password is required.
-      if (check) {
-        const password = typeof body.currentPassword === "string" ? body.currentPassword : "";
-        if (!await verifyPassword(password, current.account.passwordHash)) return check;
-      }
+      if (check) return check;
       const secret = typeof body.secret === "string" ? body.secret.trim().toUpperCase() : "";
       const code = typeof body.totpCode === "string" ? body.totpCode : "";
       if (!secret || !await verifyTotp(secret, code)) return Response.json({ error: "请先输入有效的 TOTP 验证码" }, { status: 400 });

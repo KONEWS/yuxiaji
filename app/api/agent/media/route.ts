@@ -3,7 +3,9 @@ import { getDb } from "../../../../db";
 import { userSubjects } from "../../../../db/schema";
 import { authenticateAgent, isAgentIdentity, requireAgentPermission, type AgentIdentity } from "../../../lib/agent-auth";
 import { agentJson, finishAgentOperation, reserveAgentOperation } from "../../../lib/agent-operations";
-import { parseMetadata, parseTags, presentSubject, sanitizeSubject } from "../../media/route";
+import { mergeTags, parseMetadata, presentSubject, sanitizeSubject } from "../../media/route";
+import { appendGalleryImage, cleanupDeletedGalleryAssets, deleteGalleryImagesForSubjects, galleryImagesBySubjectIds, syncGalleryImages, type GalleryImageRow } from "../../../lib/gallery-images";
+import { mediaStorageLinksByMediaIds } from "../../../lib/media-storage-link-store";
 
 const MEDIA_TYPES = ["anime", "movie", "tv", "game", "light_novel", "manga", "music", "visual", "video"] as const;
 const STATUSES = ["watching", "wish", "finished", "library", "dropped"] as const;
@@ -17,8 +19,8 @@ function normalizeType(value: unknown) {
   return MEDIA_TYPES.includes(value as (typeof MEDIA_TYPES)[number]) ? value as string : "anime";
 }
 
-function agentSubject(row: typeof userSubjects.$inferSelect) {
-  const presented = presentSubject(row);
+function agentSubject(row: typeof userSubjects.$inferSelect, images?: GalleryImageRow[], storageLinks?: unknown[]) {
+  const presented = presentSubject(row, images, storageLinks);
   return {
     ...presented,
     managedBy: "openclaw",
@@ -53,7 +55,7 @@ function subjectInput(row: typeof userSubjects.$inferSelect) {
     globalScore: row.globalScore ?? undefined,
     source: row.source,
     collection: row.collection,
-    tags: parseTags(row.tags),
+    tags: mergeTags(row.tags, row.characterTags),
     musicAlbum: row.musicAlbum,
     musicArtist: row.musicArtist,
     lyricist: row.lyricist,
@@ -66,7 +68,7 @@ function subjectInput(row: typeof userSubjects.$inferSelect) {
     pixivPid: row.pixivPid,
     author: row.author,
     twitterSource: row.twitterSource,
-    characterTags: parseTags(row.characterTags),
+    characterTags: [],
     metadata: parseMetadata(row.metadata),
   };
 }
@@ -136,15 +138,31 @@ async function writeMedia(request: Request, identity: AgentIdentity, action: "cr
       const next = sanitizeSubject(mergeMediaPatch(existing, body));
       const [updated] = await db.update(userSubjects).set(next).where(mediaScope(id, identity.userKey)).returning();
       if (!updated) throw new Error(`媒体记录更新后无法读取: id=${id}, userKey=${identity.userKey}`);
-      row = updated;
+      if (updated.type === "visual") {
+        if (body.images !== undefined) await syncGalleryImages(db, identity.userKey, id, body.images);
+        else if (updated.thumbnail && updated.thumbnail !== existing.thumbnail) await appendGalleryImage(db, identity.userKey, id, { thumbnail: updated.thumbnail, isCover: true });
+      } else if (existing.type === "visual") {
+        const oldUrls = await deleteGalleryImagesForSubjects(db, identity.userKey, [id]);
+        if (existing.thumbnail) oldUrls.push(existing.thumbnail);
+        await cleanupDeletedGalleryAssets(db, identity.userKey, oldUrls);
+      }
+      [row] = await db.select().from(userSubjects).where(mediaScope(id, identity.userKey)).limit(1);
+      if (!row) throw new Error("保存后的媒体记录无法读取");
       status = 200;
     } else {
       const next = sanitizeSubject(body);
       const [created] = await db.insert(userSubjects).values({ ...next, userKey: identity.userKey }).returning();
       if (!created) throw new Error("写入媒体记录失败");
-      row = created;
+      if (created.type === "visual") {
+        if (body.images !== undefined) await syncGalleryImages(db, identity.userKey, created.id, body.images);
+        else if (created.thumbnail) await appendGalleryImage(db, identity.userKey, created.id, { thumbnail: created.thumbnail, isCover: true });
+      }
+      [row] = await db.select().from(userSubjects).where(mediaScope(created.id, identity.userKey)).limit(1);
+      if (!row) throw new Error("写入后的媒体记录无法读取");
     }
-    const payload = { ok: true, source: "openclaw", agent: identity.agent, idempotencyKey: reservation.idempotencyKey, subject: agentSubject(row) };
+    const imageMap = await galleryImagesBySubjectIds(db, identity.userKey, row.type === "visual" ? [row.id] : []);
+    const storageMap = await mediaStorageLinksByMediaIds(db, identity.userKey, [row.id]);
+    const payload = { ok: true, source: "openclaw", agent: identity.agent, idempotencyKey: reservation.idempotencyKey, subject: agentSubject(row, imageMap.get(row.id), storageMap.get(row.id)) };
     const finishError = await finishOperation(reservation.id, status, payload);
     if (finishError) return errorJson(finishError, "媒体已写入，但操作记录失败");
     return agentJson(payload, status);
@@ -173,20 +191,25 @@ export async function GET(request: Request) {
     // Do not let list filters (type/status/tag/query) hide an existing row.
     if (Number.isInteger(id) && id > 0) {
       const [row] = await getDb().select().from(userSubjects).where(mediaScope(id, identity.userKey)).limit(1);
-      const subject = row ? agentSubject(row) : null;
+      const imageMap = row ? await galleryImagesBySubjectIds(getDb(), identity.userKey, row.type === "visual" ? [row.id] : []) : new Map();
+      const storageMap = row ? await mediaStorageLinksByMediaIds(getDb(), identity.userKey, [row.id]) : new Map();
+      const subject = row ? agentSubject(row, imageMap.get(row.id), storageMap.get(row.id)) : null;
       return agentJson({ subjects: subject ? [subject] : [], subject, source: "openclaw", agent: identity.agent });
     }
     const conditions = [eq(userSubjects.userKey, identity.userKey)];
     if (type) conditions.push(eq(userSubjects.type, normalizeType(type)));
     if (status && STATUSES.includes(status as (typeof STATUSES)[number])) conditions.push(eq(userSubjects.status, status));
     if (collection) conditions.push(eq(userSubjects.collection, collection));
-    if (tag) conditions.push(like(userSubjects.tags, `%${tag.slice(0, 80)}%`));
+    if (tag) conditions.push(or(like(userSubjects.tags, `%${tag.slice(0, 80)}%`), like(userSubjects.characterTags, `%${tag.slice(0, 80)}%`))!);
     if (query) {
       const term = `%${query.slice(0, 80)}%`;
       conditions.push(or(like(userSubjects.title, term), like(userSubjects.jp, term), like(userSubjects.tags, term), like(userSubjects.characterTags, term), like(userSubjects.author, term), like(userSubjects.musicAlbum, term), like(userSubjects.musicArtist, term))!);
     }
-    const rows = await getDb().select().from(userSubjects).where(and(...conditions)).orderBy(desc(userSubjects.updatedAt));
-    const subjects = rows.map(agentSubject);
+    const db = getDb();
+    const rows = await db.select().from(userSubjects).where(and(...conditions)).orderBy(desc(userSubjects.updatedAt));
+    const imageMap = await galleryImagesBySubjectIds(db, identity.userKey, rows.filter((row) => row.type === "visual").map((row) => row.id));
+    const storageMap = await mediaStorageLinksByMediaIds(db, identity.userKey, rows.map((row) => row.id));
+    const subjects = rows.map((row) => agentSubject(row, imageMap.get(row.id), storageMap.get(row.id)));
     return agentJson({ subjects, stats: { count: subjects.length, active: subjects.filter((item) => item.status === "watching").length }, source: "openclaw", agent: identity.agent });
   } catch (error) {
     return agentJson({ error: "读取媒体记录失败", details: errorDetails(error) }, 500);
@@ -231,13 +254,24 @@ export async function DELETE(request: Request) {
   }
   if (reservation.kind !== "reserved") return reservation.response;
   try {
-    const deleted = await getDb().delete(userSubjects).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey))).returning({ id: userSubjects.id });
+    const db = getDb();
+    const [existing] = await db.select().from(userSubjects).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey))).limit(1);
+    if (!existing) {
+      const payload = { error: "媒体记录不存在或无权删除", details: `id=${id}` };
+      const finishError = await finishOperation(reservation.id, 404, payload);
+      if (finishError) return errorJson(finishError, "媒体操作记录失败");
+      return agentJson(payload, 404);
+    }
+    const imageUrls = existing.type === "visual" ? await deleteGalleryImagesForSubjects(db, identity.userKey, [id]) : [];
+    const deleted = await db.delete(userSubjects).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey))).returning({ id: userSubjects.id });
     if (!deleted.length) {
       const payload = { error: "媒体记录不存在或无权删除", details: `id=${id}` };
       const finishError = await finishOperation(reservation.id, 404, payload);
       if (finishError) return errorJson(finishError, "媒体操作记录失败");
       return agentJson(payload, 404);
     }
+    if (existing.thumbnail) imageUrls.push(existing.thumbnail);
+    if (imageUrls.length) await cleanupDeletedGalleryAssets(db, identity.userKey, imageUrls);
     const payload = { ok: true, source: "openclaw", agent: identity.agent, idempotencyKey: reservation.idempotencyKey, deleted: { id } };
     const finishError = await finishOperation(reservation.id, 200, payload);
     if (finishError) return errorJson(finishError, "媒体已删除，但操作记录失败");

@@ -7,7 +7,7 @@ import { parseTags } from "../../media/route";
 
 function cleanTags(value: unknown) {
   if (!Array.isArray(value)) return [];
-  return Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean))).slice(0, 30);
+  return Array.from(new Set(value.map((item) => (typeof item === "string" || typeof item === "number") ? String(item).trim().slice(0, 80) : "").filter(Boolean))).slice(0, 30);
 }
 
 export async function GET(request: Request) {
@@ -87,4 +87,3 @@ export async function DELETE(request: Request) {
     return agentJson(payload, 500);
   }
 }
-

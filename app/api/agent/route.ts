@@ -16,6 +16,7 @@ export async function GET(request: Request) {
       gallery: "/api/agent/gallery",
       galleryUpload: "/api/agent/gallery/upload",
       video: "/api/agent/video",
+      storage: "/api/agent/storage",
       bangumiSync: "/api/agent/sync",
     },
   }, { headers: { "cache-control": "no-store" } });

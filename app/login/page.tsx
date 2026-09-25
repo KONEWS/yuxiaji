@@ -5,6 +5,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 type Status = { initialized: boolean; authenticated: boolean; account?: { username: string; mustChangePassword: boolean } | null };
 
+function safeNext(value: string | null) {
+  return value?.startsWith("/") && !value.startsWith("//") ? value : "/";
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const search = useSearchParams();
@@ -17,7 +21,22 @@ export default function LoginPage() {
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { fetch("/api/auth/status", { cache: "no-store" }).then((response) => response.json()).then(setStatus).catch(() => setMessage("认证服务暂时不可用")); }, []);
+  useEffect(() => {
+    let active = true;
+    fetch("/api/auth/status", { cache: "no-store" })
+      .then((response) => response.json() as Promise<Status>)
+      .then((nextStatus) => {
+        if (!active) return;
+        if (nextStatus.authenticated) {
+          const destination = safeNext(search.get("next"));
+          router.replace(nextStatus.account?.mustChangePassword ? "/settings/security?force=1" : destination);
+          return;
+        }
+        setStatus(nextStatus);
+      })
+      .catch(() => { if (active) setMessage("认证服务暂时不可用"); });
+    return () => { active = false; };
+  }, [router, search]);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setMessage("");
@@ -28,7 +47,7 @@ export default function LoginPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "登录失败");
       if (payload.requires2fa) { setStage("2fa"); setCode(""); return; }
-      router.replace(payload.account?.mustChangePassword ? "/settings/security?force=1" : search.get("next") || "/");
+      router.replace(payload.account?.mustChangePassword ? "/settings/security?force=1" : safeNext(search.get("next")));
     } catch (error) { setMessage(error instanceof Error ? error.message : "登录失败"); }
     finally { setBusy(false); }
   }

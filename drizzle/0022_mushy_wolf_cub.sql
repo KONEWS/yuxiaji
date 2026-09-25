@@ -1,0 +1,1 @@
+ALTER TABLE `user_devices` ADD `cover_zoom` integer DEFAULT 100 NOT NULL;

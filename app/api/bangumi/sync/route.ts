@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { userSubjects } from "../../../../db/schema";
 import { bangumiRequestOptions, getAllBangumiUserCollections, getBangumiSubject, subjectImage, subjectScore, subjectTags } from "../../../lib/bangumi-api";
@@ -19,12 +19,34 @@ function normalizeSubjectIds(value: unknown) {
   return ids.length ? Array.from(new Set(ids)) : null;
 }
 
-function mediaTypeForBangumiId(value: unknown) {
-  return value === 2 ? "anime" : value === 4 ? "game" : value === 3 ? "music" : value === 1 ? "light_novel" : null;
+function mediaTypeForBangumiId(value: unknown, platform = "", tags: string[] = []) {
+  if (value === 1) {
+    const descriptor = `${platform} ${tags.join(" ")}`.toLowerCase();
+    return /漫画|コミック|manga|manhwa|manhua|webtoon/.test(descriptor) ? "manga" : "light_novel";
+  }
+  return value === 2 ? "anime" : value === 4 ? "game" : value === 3 ? "music" : null;
+}
+
+function canContainSelectedType(subjectType: unknown, selectedTypes: Set<MediaType>) {
+  if (subjectType === 1) return selectedTypes.has("light_novel") || selectedTypes.has("manga");
+  const type = mediaTypeForBangumiId(subjectType);
+  return Boolean(type && selectedTypes.has(type));
 }
 
 function statusForCollectionType(value: unknown) {
   return value === 1 ? "wish" : value === 2 ? "finished" : value === 3 ? "watching" : value === 4 ? "library" : value === 5 ? "dropped" : "watching";
+}
+
+function mergeBangumiSource(metadataText: string | undefined, subjectId: number) {
+  let metadata: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(metadataText || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) metadata = parsed as Record<string, unknown>;
+  } catch {
+    // Keep malformed legacy metadata from aborting an import.
+  }
+  const sources = metadata.sources && typeof metadata.sources === "object" && !Array.isArray(metadata.sources) ? metadata.sources as Record<string, unknown> : {};
+  return normalizeMediaMetadata({ ...metadata, sources: { ...sources, bangumi: String(subjectId) } });
 }
 
 export async function GET() {
@@ -46,47 +68,49 @@ export async function POST(request: Request) {
     if (!types.length) return Response.json({ error: "没有可同步的媒体类型" }, { status: 400 });
     const syncFields = normalizeSyncSettings(body.syncSettings).bangumi;
     const subjectIds = normalizeSubjectIds(body.subjectIds);
-    // VNDB-backed games have numeric compatibility IDs in subject_id, but
-    // they are not Bangumi records and must never be refreshed from Bangumi.
-    const conditions = [eq(userSubjects.userKey, key), inArray(userSubjects.type, types), ne(userSubjects.source, "vndb")];
+    // subject_id is an integer compatibility field also used by older VNDB
+    // records. Only explicit Bangumi rows may be sent to the Bangumi API.
+    const conditions = [eq(userSubjects.userKey, key), inArray(userSubjects.type, types), eq(userSubjects.source, "bangumi")];
     if (subjectIds) conditions.push(inArray(userSubjects.subjectId, subjectIds));
     const rows = await getDb().select().from(userSubjects).where(and(...conditions)).limit(100);
     const options = { ...bangumiRequestOptions(request), userToken: typeof body.userToken === "string" ? body.userToken : bangumiRequestOptions(request).userToken };
     if (body.mode === "import") {
       const username = typeof body.username === "string" ? body.username : "";
       const collections = await getAllBangumiUserCollections(username, options, 100);
-      const selected = collections.filter((item) => {
-        const type = mediaTypeForBangumiId(item.subject_type);
-        return type && types.includes(type);
-      }).slice(0, 100);
+      const selectedTypes = new Set(types);
+      const selected = collections.filter((item) => canContainSelectedType(item.subject_type, selectedTypes)).slice(0, 100);
       const results = await Promise.allSettled(selected.map(async (item) => {
-        const mediaType = mediaTypeForBangumiId(item.subject_type)!;
         const subject = await getBangumiSubject(item.subject_id, options);
+        const mediaType = mediaTypeForBangumiId(item.subject_type, subject.platform, subjectTags(subject));
+        if (!mediaType || !selectedTypes.has(mediaType)) return null;
+        const [existing] = await getDb().select().from(userSubjects).where(and(eq(userSubjects.userKey, key), eq(userSubjects.subjectId, item.subject_id), eq(userSubjects.source, "bangumi"))).limit(1);
+        const remoteTags = [...subjectTags(subject), ...(item.tags || item.tag || [])].filter(Boolean).slice(0, 30);
+        const remoteImage = subjectImage(subject) || null;
         const data = {
           type: mediaType,
           subjectId: item.subject_id,
-          title: subject.name_cn || subject.name,
-          jp: subject.name,
-          note: item.comment || "",
-          progress: 0,
-          total: mediaType === "music" ? 1 : mediaType === "game" ? 100 : subject.eps || 12,
+          title: existing?.title || subject.name_cn || subject.name,
+          jp: existing?.jp || subject.name,
+          note: existing?.note ?? item.comment ?? "",
+          progress: mediaType === "music" ? Math.max(0, Number(item.vol_status) || 0) : Math.max(0, Number(item.ep_status) || 0),
+          total: existing?.total ?? (mediaType === "music" ? 1 : mediaType === "game" ? 100 : subject.eps || 12),
           status: statusForCollectionType(item.type ?? item.collection_type),
           kind: "coral",
           score: Number.isInteger(item.rate) && item.rate! >= 1 && item.rate! <= 10 ? item.rate : null,
-          next: null,
-          image: subjectImage(subject) || null,
-          globalScore: subjectScore(subject) || null,
-          source: "bangumi",
+          next: existing?.next ?? null,
+          image: existing?.image || remoteImage,
+          globalScore: existing?.globalScore ?? (subjectScore(subject) || null),
+          source: existing?.source || "bangumi",
           collection: "",
-          tags: JSON.stringify([...subjectTags(subject), ...(item.tags || [])].slice(0, 30)),
+          tags: existing?.tags || JSON.stringify(remoteTags),
           musicAlbum: "",
           musicArtist: "",
           lyricist: "",
           composer: "",
           animeSong: mediaType === "music" && subjectTags(subject).some((tag) => /动画|原声|主题曲|片尾|片头/.test(tag)),
+          metadata: JSON.stringify(mergeBangumiSource(existing?.metadata, item.subject_id)),
           updatedAt: new Date(),
         };
-        const [existing] = await getDb().select().from(userSubjects).where(and(eq(userSubjects.userKey, key), eq(userSubjects.subjectId, item.subject_id), ne(userSubjects.source, "vndb"))).limit(1);
         if (existing) {
           await getDb().update(userSubjects).set(data).where(and(eq(userSubjects.id, existing.id), eq(userSubjects.userKey, key)));
           return { mediaId: existing.id, subjectId: item.subject_id, imported: true };
@@ -94,7 +118,7 @@ export async function POST(request: Request) {
         const [created] = await getDb().insert(userSubjects).values({ ...data, userKey: key }).returning({ id: userSubjects.id });
         return { mediaId: created?.id, subjectId: item.subject_id, imported: true };
       }));
-      const imported = results.filter((result) => result.status === "fulfilled").map((result) => result.value);
+      const imported = results.flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : []);
       return Response.json({ ok: true, provider: "bangumi", authMode: options.userToken ? "user_token" : "public", mode: "import", requested: selected.length, synced: imported.length, failed: selected.length - imported.length, updates: imported, errors: [] }, { headers: { "cache-control": "no-store" } });
     }
     const results = await Promise.allSettled(rows.filter((row) => row.subjectId).map(async (row) => {

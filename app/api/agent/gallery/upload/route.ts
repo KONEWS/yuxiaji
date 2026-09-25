@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../../db";
-import { userSubjects } from "../../../../../db/schema";
+import { userSubjectImages, userSubjects } from "../../../../../db/schema";
 import { authenticateAgent, isAgentIdentity, requireAgentPermission } from "../../../../lib/agent-auth";
 import { agentJson, finishAgentOperation, reserveAgentOperation } from "../../../../lib/agent-operations";
+import { appendGalleryImage, presentGalleryImage } from "../../../../lib/gallery-images";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024;
@@ -66,8 +67,6 @@ function responsePayload(identity: { agent: string }, assetId: number, objectKey
 export async function POST(request: Request) {
   const identity = authenticateAgent(request);
   if (!isAgentIdentity(identity)) return identity;
-  const denied = requireAgentPermission(identity, "gallery:create");
-  if (denied) return denied;
 
   let form: FormData;
   try {
@@ -81,6 +80,11 @@ export async function POST(request: Request) {
   if (!idempotencyKey) return agentJson({ error: "上传需要 idempotencyKey" }, 400);
   const url = new URL(request.url);
   const galleryId = parsePositiveId(form.get("galleryId") || form.get("id") || url.searchParams.get("galleryId") || url.searchParams.get("id"));
+  // Attaching an image to an existing gallery is an update operation. Keep
+  // create permission for standalone uploads so agents can be least-privilege
+  // configured without granting both capabilities.
+  const denied = requireAgentPermission(identity, galleryId ? "gallery:update" : "gallery:create");
+  if (denied) return denied;
   if (file.size <= 0 || file.size > MAX_INPUT_BYTES) return agentJson({ error: "原始图片不能超过 20 MB" }, 413);
 
   const input = new Uint8Array(await file.arrayBuffer());
@@ -127,6 +131,7 @@ export async function POST(request: Request) {
   if (reservation.kind !== "reserved") return reservation.response;
 
   let objectKey = "";
+  const thumbnailUrl = `/api/media-assets?v=${reservation.id}`;
   try {
     const images = (env as RuntimeEnv).IMAGES;
     if (!images) {
@@ -143,22 +148,46 @@ export async function POST(request: Request) {
     if (thumbnailBytes.byteLength > MAX_THUMBNAIL_BYTES) throw new Error("生成的缩略图不能超过 5 MB");
     objectKey = `media-assets/${await userHash(identity.userKey)}/gallery/${reservation.id}`;
     await env.BUCKET.put(objectKey, thumbnailBytes, { httpMetadata: { contentType: "image/webp" } });
-    const thumbnailUrl = `/api/media-assets?v=${reservation.id}`;
-    if (galleryId) {
-      const [updated] = await getDb().update(userSubjects).set({ thumbnail: thumbnailUrl, updatedAt: new Date() }).where(and(
-        eq(userSubjects.id, galleryId),
-        eq(userSubjects.userKey, identity.userKey),
-        eq(userSubjects.type, "visual"),
-      )).returning({ id: userSubjects.id });
-      if (!updated) throw new Error(`画廊记录更新失败: galleryId=${galleryId}`);
+    const attached = galleryId
+      ? await appendGalleryImage(getDb(), identity.userKey, galleryId, {
+        thumbnail: thumbnailUrl,
+        imageHash: hash,
+        mime: "image/webp",
+        sourceUrl: String(form.get("sourceUrl") || ""),
+        isCover: String(form.get("isCover") || "").toLowerCase() === "true",
+      })
+      : null;
+    const duplicate = Boolean(attached && attached.image.thumbnail !== thumbnailUrl);
+    if (duplicate) {
+      const bucket = env.BUCKET as unknown as { delete?: (key: string) => Promise<void> };
+      await bucket.delete?.(objectKey);
+      objectKey = "";
     }
-    const payload = responsePayload(identity, reservation.id, objectKey, galleryId, thumbnailUrl, hash);
+    const responseUrl = attached?.image.thumbnail || thumbnailUrl;
+    const payload = {
+      ...responsePayload(identity, reservation.id, objectKey, galleryId, responseUrl, hash),
+      ...(duplicate ? { duplicate: true } : {}),
+      ...(attached ? { galleryImage: presentGalleryImage(attached.image), images: attached.images.map(presentGalleryImage) } : {}),
+    };
     await finishAgentOperation(reservation.id, 201, payload);
     return agentJson(payload, 201);
   } catch (error) {
     if (objectKey) {
       const bucket = env.BUCKET as unknown as { delete?: (key: string) => Promise<void> };
-      try { await bucket.delete?.(objectKey); } catch { /* best-effort orphan cleanup */ }
+      try {
+        const db = getDb();
+        const [imageReferences, subjectReferences] = await Promise.all([
+          db.select({ id: userSubjectImages.id }).from(userSubjectImages).where(and(
+            eq(userSubjectImages.userKey, identity.userKey),
+            eq(userSubjectImages.thumbnail, thumbnailUrl),
+          )).limit(1),
+          db.select({ id: userSubjects.id }).from(userSubjects).where(and(
+            eq(userSubjects.userKey, identity.userKey),
+            eq(userSubjects.thumbnail, thumbnailUrl),
+          )).limit(1),
+        ]);
+        if (!imageReferences.length && !subjectReferences.length) await bucket.delete?.(objectKey);
+      } catch { /* Keep the object when reference status is uncertain. */ }
     }
     const payload = { error: "图片上传失败", details: error instanceof Error ? error.message : String(error) };
     await finishAgentOperation(reservation.id, 500, payload).catch(() => undefined);

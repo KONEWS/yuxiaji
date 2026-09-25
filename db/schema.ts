@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const userState = sqliteTable("user_state", {
@@ -82,6 +83,61 @@ export const userSubjects = sqliteTable(
 );
 
 /**
+ * Images owned by a visual gallery entry. `user_subjects.thumbnail` remains
+ * the compatibility/main-cover field; this table is the normalized source of
+ * truth for galleries that contain more than one image.
+ */
+export const userSubjectImages = sqliteTable(
+  "user_subject_images",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userKey: text("user_key").notNull(),
+    subjectId: integer("subject_id").notNull().references(() => userSubjects.id, { onDelete: "cascade" }),
+    thumbnail: text("thumbnail").notNull(),
+    sourceUrl: text("source_url").notNull().default(""),
+    imageHash: text("image_hash").notNull().default(""),
+    sortOrder: integer("sort_order").notNull().default(0),
+    isCover: integer("is_cover", { mode: "boolean" }).notNull().default(false),
+    width: integer("width"),
+    height: integer("height"),
+    mime: text("mime").notNull().default(""),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("user_subject_images_user_idx").on(table.userKey),
+    index("user_subject_images_subject_order_idx").on(table.subjectId, table.sortOrder),
+    uniqueIndex("user_subject_images_subject_thumbnail_idx").on(table.subjectId, table.thumbnail),
+  ],
+);
+
+/** Provider-neutral locations where a media entry can be accessed. */
+export const mediaStorageLinks = sqliteTable(
+  "media_storage_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userKey: text("user_key").notNull(),
+    mediaId: integer("media_id").notNull().references(() => userSubjects.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    label: text("label").notNull().default(""),
+    url: text("url").notNull().default(""),
+    path: text("path").notNull().default(""),
+    isPrimary: integer("is_primary", { mode: "boolean" }).notNull().default(false),
+    note: text("note").notNull().default(""),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    index("media_storage_links_user_idx").on(table.userKey),
+    index("media_storage_links_media_idx").on(table.userKey, table.mediaId),
+    index("media_storage_links_provider_path_lookup_idx").on(table.userKey, table.mediaId, table.provider, table.path),
+    uniqueIndex("media_storage_links_primary_idx")
+      .on(table.userKey, table.mediaId)
+      .where(sql`${table.isPrimary} = 1`),
+  ],
+);
+
+/**
  * 装备库（user_devices）。
  * `category` 4 大类：
  *   audio               音频
@@ -106,6 +162,9 @@ export const userDevices = sqliteTable(
     purchaseDate: text("purchase_date"),
     receiptImage: text("receipt_image"),
     coverImage: text("cover_image"),
+    coverPositionX: integer("cover_position_x").notNull().default(50),
+    coverPositionY: integer("cover_position_y").notNull().default(50),
+    coverZoom: integer("cover_zoom").notNull().default(100),
     tags: text("tags").notNull().default("[]"),
     rating: integer("rating"),
     review: text("review").notNull().default(""),

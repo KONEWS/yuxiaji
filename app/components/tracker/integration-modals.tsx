@@ -54,7 +54,7 @@ function SettingsModal(props: {
     <section className="settings-section"><div className="settings-label"><b>界面字体</b></div><div className="font-options"><button className={props.font === "modern" ? "active" : ""} onClick={() => props.setFont("modern")}><b>现代黑体</b><span>月下集</span></button><button className={props.font === "round" ? "active" : ""} onClick={() => props.setFont("round")}><b>清爽圆体</b><span>轻快一点</span></button><button className={props.font === "serif" ? "active" : ""} onClick={() => props.setFont("serif")}><b>书卷宋体</b><span>安静耐看</span></button></div></section>
     <section className="settings-section"><div className="settings-label"><b>标题显示</b><span>仅显示所选标题</span></div><div className="title-options"><button className={props.titleMode === "cn" ? "active" : ""} onClick={() => props.setTitleMode("cn")}><b>中文优先</b><small>葬送的芙莉莲</small></button><button className={props.titleMode === "jp" ? "active" : ""} onClick={() => props.setTitleMode("jp")}><b>日文优先</b><small>葬送のフリーレン</small></button></div></section>
     <section className="settings-section"><div className="settings-label"><b>背景图片</b></div><div className="background-control"><div><span>自定义背景会自动淡化</span></div><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => props.uploadBackground(event.target.files?.[0])} /><button onClick={() => fileInput.current?.click()}>选择图片</button><label>淡化 {props.softness}%<input type="range" min="35" max="94" value={props.softness} onChange={(event) => props.setSoftness(Number(event.target.value))} /></label></div></section>
-    <section className="settings-section sync-settings"><div className="settings-label"><b>来源同步设置</b><span>选择允许自动更新的字段</span></div><p>修改来源 ID 或执行资料刷新时，仅更新已勾选的字段；进度、收藏状态和个人标签不会改变。</p><div className="source-sync-grid">{syncSources.map(([provider, label, description]) => <section className="source-sync-card" key={provider}><div className="source-sync-heading"><b>{label}</b><small>{description}</small></div><div className="source-sync-options">{syncFields.map(([field, fieldLabel]) => <label key={field} className="source-sync-toggle"><input type="checkbox" checked={props.syncSettings[provider][field]} onChange={() => props.toggleSyncSetting(provider, field)} /><span>{fieldLabel}</span></label>)}</div></section>)}</div></section>
+    <section className="settings-section sync-settings"><div className="settings-label"><b>来源同步设置</b><span>选择允许自动更新的字段</span></div><p>修改来源 ID 或执行资料刷新时，仅更新已勾选的字段；进度、收藏状态和标签不会改变。</p><div className="source-sync-grid">{syncSources.map(([provider, label, description]) => <section className="source-sync-card" key={provider}><div className="source-sync-heading"><b>{label}</b><small>{description}</small></div><div className="source-sync-options">{syncFields.map(([field, fieldLabel]) => <label key={field} className="source-sync-toggle"><input type="checkbox" checked={props.syncSettings[provider][field]} onChange={() => props.toggleSyncSetting(provider, field)} /><span>{fieldLabel}</span></label>)}</div></section>)}</div></section>
     <section className="settings-section"><div className="settings-label"><b>账户安全</b><span>管理员登录、2FA、Bangumi 与设备 Session</span></div><button className="account-row" onClick={() => setSecurityOpen(true)}><i>锁</i><span><b>打开账户安全</b><small>修改密码、绑定 Bangumi、管理验证器和注销设备</small></span><em>→</em></button></section>
   </section></div>{securityOpen && <div className="overlay security-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) setSecurityOpen(false); }}><div className="security-modal" role="dialog" aria-modal="true" aria-label="账户安全"><SecurityPanel embedded onClose={() => setSecurityOpen(false)} /></div></div>}</>;
 }
@@ -73,7 +73,17 @@ function ConnectivityModal({ close }: { close: () => void }) {
     return () => { active = false; };
   }, [requestVersion]);
 
-  const icons: Record<string, string> = { database: "库", bangumi: "番", vndb: "VN", anilist: "播", animeschedule: "时" };
+  const icons: Record<string, string> = {
+    database: "库",
+    bangumi: "番",
+    vndb: "VN",
+    anilist: "播",
+    mangadex: "漫",
+    google_books: "书",
+    open_library: "书",
+    ndl: "本",
+    animeschedule: "时",
+  };
   const rows: ConnectionItem[] = (report?.services || []).map((service) => ({
     icon: icons[service.id] || "源", name: service.name, description: service.description,
     status: service.status || (service.ok ? "正常" : "异常"), latency: service.latency ? `${service.latency} ms` : "—", tone: service.status === "未配置" ? "gray" : service.ok ? "cyan" : "purple",

@@ -187,7 +187,8 @@ export function SecurityPanel({ embedded = false, onClose }: { embedded?: boolea
       });
       const refreshed = await apiRequest("/api/bangumi/account", { cache: "no-store" });
       setBangumi((refreshed.account || null) as BangumiBinding | null);
-      setBangumiMessage(`${bangumiSyncDirection === "pull" ? "导入" : "写入"}完成：成功 ${String(payload.synced ?? 0)} 条${payload.failed ? `，失败 ${String(payload.failed)} 条` : ""}`);
+      const firstError = Array.isArray(payload.errors) && payload.errors[0] && typeof payload.errors[0] === "object" ? String((payload.errors[0] as { error?: unknown }).error || "") : "";
+      setBangumiMessage(`${bangumiSyncDirection === "pull" ? "导入" : "写入"}完成：成功 ${String(payload.synced ?? 0)} 条${payload.failed ? `，失败 ${String(payload.failed)} 条${firstError ? `（${firstError}）` : ""}` : ""}`);
     } catch (error) {
       setBangumiError(true);
       setBangumiMessage(error instanceof Error ? error.message : "同步失败");
@@ -297,7 +298,7 @@ export function SecurityPanel({ embedded = false, onClose }: { embedded?: boolea
         <div className="security-card-title"><div><h2>AniList</h2><p>放送时间与封面补充</p></div><span className={aniListStatus?.ok ? "enabled" : ""}>{aniListStatus ? (aniListStatus.ok ? "已启用" : aniListStatus.status || "异常") : "检查中"}</span></div>
         <p>使用 AniList 公共 GraphQL API，不需要单独配置令牌。用于补充下一集时间、集数和封面，不会修改你的收藏。</p>
         <div className="bangumi-binding-status anilist-status"><span>接口状态：{aniListStatus ? (aniListStatus.ok ? "正常" : aniListStatus.status || "异常") : "检测中"}</span><span>最近检查：{aniListStatus?.checkedAt ? new Date(aniListStatus.checkedAt).toLocaleString("zh-CN") : "—"}</span>{typeof aniListStatus?.latency === "number" && <span>响应：{aniListStatus.latency} ms</span>}</div>
-        <div className="anilist-card-actions"><a className="auth-link" href="https://docs.anilist.co/" target="_blank" rel="noreferrer">查看 API 文档 ↗</a><button className="auth-primary" onClick={() => router.push("/calendar")}>打开放送日历</button></div>
+        <div className="anilist-card-actions"><a className="auth-link" href="https://docs.anilist.co/" target="_blank" rel="noreferrer">查看 API 文档 ↗</a></div>
       </section>
       </div>
 

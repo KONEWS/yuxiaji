@@ -18,6 +18,17 @@ export const MEDIA_CATEGORIES = [
 
 export type MediaCategoryId = (typeof MEDIA_CATEGORIES)[number]["id"];
 
+/** 媒体库状态筛选适用于可追踪进度的收藏，不适用于音乐、画廊和视频资产。 */
+export const COLLECTION_MEDIA_TYPES = ["anime", "movie", "tv", "game", "light_novel", "manga"] as const;
+export function isCollectionMediaType(value?: string | null): value is (typeof COLLECTION_MEDIA_TYPES)[number] {
+  return COLLECTION_MEDIA_TYPES.includes(value as (typeof COLLECTION_MEDIA_TYPES)[number]);
+}
+
+/** External identifiers are kept together so one local record can link to
+ * several public catalogs without changing the existing D1 schema. */
+export type MediaSourceIds = Record<string, string>;
+export type MediaFieldSources = Partial<Record<"title" | "cover" | "overview" | "score" | "tags", string>>;
+
 /** 影视条目的扩展元数据，按 JSON 存储以保持旧记录与迁移兼容。 */
 export type MediaMetadata = {
   director: string;
@@ -44,6 +55,19 @@ export type MediaMetadata = {
   duration?: string;
   /** SHA-256 digest of the uploaded Gallery source image. */
   imageHash?: string;
+  /** IDs from Bangumi, AniList, MangaDex, books catalogs, etc. */
+  sources?: MediaSourceIds;
+  /** ISBN and other edition-level identifiers. */
+  identifiers?: Record<string, string>;
+  /** Per-field provenance; manual values are never overwritten by sync. */
+  fieldSources?: MediaFieldSources;
+  /** Distinguishes a light novel from a general book in shared UI storage. */
+  bookKind?: "light_novel" | "book";
+  /** Percentage-based focal point used when the cover is displayed with object-fit: cover. */
+  coverPositionX?: number;
+  coverPositionY?: number;
+  /** Cover scale percentage used by the position editor (100 is the default). */
+  coverZoom?: number;
 };
 
 export const SYNC_PROVIDERS = ["bangumi", "vndb"] as const;
@@ -119,6 +143,33 @@ export function normalizeMediaMetadata(value?: unknown): MediaMetadata {
     return Number.isInteger(number) && number >= min && number <= max ? number : undefined;
   };
   const stringArray = (candidate: unknown, max: number) => Array.isArray(candidate) ? Array.from(new Set(candidate.map((item) => String(item).trim()).filter(Boolean))).slice(0, max) : [];
+  const stringMap = (candidate: unknown, max: number) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return {};
+    const output: Record<string, string> = {};
+    Object.entries(candidate as Record<string, unknown>).slice(0, max).forEach(([key, item]) => {
+      const normalizedKey = key.trim().slice(0, 40);
+      const normalizedValue = typeof item === "string" ? item.trim().slice(0, 240) : String(item ?? "").trim().slice(0, 240);
+      if (normalizedKey && normalizedValue) output[normalizedKey] = normalizedValue;
+    });
+    return output;
+  };
+  const fieldSources = stringMap(source.fieldSources, 20) as MediaFieldSources;
+  const bookKind = source.bookKind === "book" || source.bookKind === "light_novel" ? source.bookKind : undefined;
+  const coverPosition = (candidate: unknown) => {
+    const number = Number(candidate);
+    return candidate !== undefined && candidate !== null && candidate !== "" && Number.isFinite(number)
+      ? Math.round(Math.min(100, Math.max(0, number)))
+      : undefined;
+  };
+  const coverPositionX = coverPosition(source.coverPositionX);
+  const coverPositionY = coverPosition(source.coverPositionY);
+  const coverZoom = (candidate: unknown) => {
+    const number = Number(candidate);
+    return candidate !== undefined && candidate !== null && candidate !== "" && Number.isFinite(number)
+      ? Math.round(Math.min(240, Math.max(100, number)))
+      : undefined;
+  };
+  const normalizedCoverZoom = coverZoom(source.coverZoom);
   return {
     director: typeof source.director === "string" ? source.director.trim().slice(0, 160) : "",
     actors,
@@ -143,6 +194,13 @@ export function normalizeMediaMetadata(value?: unknown): MediaMetadata {
     creator: typeof source.creator === "string" ? source.creator.trim().slice(0, 160) : "",
     duration: typeof source.duration === "string" ? source.duration.trim().slice(0, 40) : "",
     ...(imageHash ? { imageHash } : {}),
+    sources: stringMap(source.sources, 20),
+    identifiers: stringMap(source.identifiers, 20),
+    ...(Object.keys(fieldSources).length ? { fieldSources } : {}),
+    ...(bookKind ? { bookKind } : {}),
+    ...(coverPositionX !== undefined ? { coverPositionX } : {}),
+    ...(coverPositionY !== undefined ? { coverPositionY } : {}),
+    ...(normalizedCoverZoom !== undefined ? { coverZoom: normalizedCoverZoom } : {}),
   };
 }
 

@@ -39,7 +39,16 @@ const worker = {
     // fall through to the administrator's browser session.
     const isAgentEndpoint = url.pathname === "/api/agent" || url.pathname.startsWith("/api/agent/");
     const isAuthEndpoint = url.pathname === "/api/auth" || url.pathname.startsWith("/api/auth/");
-    const isStatic = url.pathname.startsWith("/_next/") || url.pathname.startsWith("/assets/") || ["/favicon.svg", "/og.png", "/robots.txt"].includes(url.pathname);
+    const isStatic = url.pathname.startsWith("/_next/") || url.pathname.startsWith("/assets/") || [
+      "/favicon.ico",
+      "/favicon.svg",
+      "/favicon.png",
+      "/favicon-32.png",
+      "/favicon-192.png",
+      "/apple-touch-icon.png",
+      "/og.png",
+      "/robots.txt",
+    ].includes(url.pathname);
     const isLoginPage = url.pathname === "/login" || url.pathname.startsWith("/login/");
     if (!isAgentEndpoint && !isAuthEndpoint && !isStatic && !isLoginPage) {
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
@@ -78,6 +87,13 @@ const worker = {
           return result.response();
         },
       }, allowedWidths);
+    }
+
+    // Some browsers still probe the conventional ICO path even when the
+    // document declares PNG/SVG icons. Serve the existing 32px PNG instead of
+    // letting the auth guard turn the probe into a login-page redirect.
+    if (url.pathname === "/favicon.ico") {
+      return env.ASSETS.fetch(new Request(new URL("/favicon-32.png", request.url), { method: request.method, headers: request.headers }));
     }
 
     return handler.fetch(request, env, ctx);

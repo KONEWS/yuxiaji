@@ -14,7 +14,7 @@ function normalizeCategory(value: unknown) {
 
 export function parseTags(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.map((item) => String(item).trim()).filter(Boolean).slice(0, 12);
+    return value.map((item) => (typeof item === "string" || typeof item === "number") ? String(item).trim() : "").filter(Boolean).slice(0, 12);
   }
   if (typeof value === "string") {
     try {
@@ -32,6 +32,18 @@ function serializeTags(tags: unknown): string {
   return JSON.stringify(parseTags(tags));
 }
 
+function parseCoverPosition(value: unknown) {
+  if (value === undefined || value === null || value === "") return 50;
+  const position = Number(value);
+  return Number.isFinite(position) ? Math.round(Math.min(100, Math.max(0, position))) : 50;
+}
+
+function parseCoverZoom(value: unknown) {
+  if (value === undefined || value === null || value === "") return 100;
+  const zoom = Number(value);
+  return Number.isFinite(zoom) ? Math.round(Math.min(240, Math.max(100, zoom))) : 100;
+}
+
 export function sanitizeDevice(body: Record<string, unknown>) {
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
   const category = normalizeCategory(body.category);
@@ -42,6 +54,9 @@ export function sanitizeDevice(body: Record<string, unknown>) {
   const purchaseDate = typeof body.purchaseDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.purchaseDate) ? body.purchaseDate : null;
   const receiptImage = typeof body.receiptImage === "string" ? body.receiptImage.trim().slice(0, 500) : "";
   const coverImage = typeof body.coverImage === "string" ? body.coverImage.trim().slice(0, 500) : "";
+  const coverPositionX = parseCoverPosition(body.coverPositionX);
+  const coverPositionY = parseCoverPosition(body.coverPositionY);
+  const coverZoom = parseCoverZoom(body.coverZoom);
   const rating = Number(body.rating);
   const review = typeof body.review === "string" ? body.review.trim().slice(0, 2000) : "";
   return {
@@ -54,6 +69,9 @@ export function sanitizeDevice(body: Record<string, unknown>) {
     purchaseDate,
     receiptImage,
     coverImage,
+    coverPositionX,
+    coverPositionY,
+    coverZoom,
     tags: serializeTags(body.tags),
     rating: Number.isInteger(rating) && rating >= 1 && rating <= 10 ? rating : null,
     review,
@@ -109,8 +127,14 @@ export async function POST(request: Request) {
     if (Number.isInteger(requestedId) && requestedId > 0) {
       const [existing] = await db.select().from(userDevices).where(and(eq(userDevices.id, requestedId), eq(userDevices.userKey, key))).limit(1);
       if (!existing) return Response.json({ error: "设备不存在或无权修改" }, { status: 404 });
-      await db.update(userDevices).set(next).where(and(eq(userDevices.id, requestedId), eq(userDevices.userKey, key)));
-      device = { ...existing, ...next, id: requestedId };
+      const update = {
+        ...next,
+        coverPositionX: body.coverPositionX === undefined ? existing.coverPositionX : next.coverPositionX,
+        coverPositionY: body.coverPositionY === undefined ? existing.coverPositionY : next.coverPositionY,
+        coverZoom: body.coverZoom === undefined ? existing.coverZoom : next.coverZoom,
+      };
+      await db.update(userDevices).set(update).where(and(eq(userDevices.id, requestedId), eq(userDevices.userKey, key)));
+      device = { ...existing, ...update, id: requestedId };
     } else {
       const [created] = await db.insert(userDevices).values({ ...next, userKey: key }).returning();
       if (!created) return Response.json({ error: "写入失败" }, { status: 500 });

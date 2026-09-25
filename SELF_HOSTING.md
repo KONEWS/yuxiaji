@@ -2,6 +2,16 @@
 
 前端只通过同源 `/api` 访问数据，不直接依赖数据库、对象存储或部署平台。当前实现使用 D1 与 R2；以后迁移到自己的云服务器时，页面和交互层无需重写，只替换三组服务端接口即可。
 
+## 原图网盘归档
+
+网站不会直接登录 MEGA，也不会保存 rclone remote、网盘账号、密码或 token。OpenClaw 在自己的
+主机上通过 rclone 完成不可覆盖上传和完整校验，然后只把 provider、分享 URL、远端归档路径、
+校验状态和摘要写入 `/api/agent/storage`。浏览器使用 `/api/media/storage` 管理同一组私有链接。
+
+上线顺序：先应用 `drizzle/0023_classy_jetstream.sql` 与后续迁移，再部署 Worker；随后在 OpenClaw
+主机交互式配置 rclone/MEGA，并用独立的 Agent token 回填链接。不要把 rclone 配置或 MEGA
+凭据放进 Wrangler vars/secrets、D1、源代码或 API 请求。
+
 ## 稳定接口
 
 - `GET /api/state`：读取界面设置与用户偏好。
@@ -18,10 +28,14 @@
 - `POST /api/bangumi/sync`：按媒体类型刷新当前用户已绑定的 Bangumi 条目；默认使用公开 API，可通过 `x-bangumi-user-token` 或请求体中的 `userToken` 预留 user token。
 - `GET /api/background`：读取当前用户背景。
 - `POST /api/background`：上传当前用户背景。
+- `GET /api/media/storage?mediaId=`：读取媒体的全部存储位置。
+- `POST/PATCH/DELETE /api/media/storage`：管理媒体存储位置；可保存多个 provider、分享 URL、路径、验证状态和清单摘要。
 
 浏览器端的调用集中在 `app/lib/client-api.ts`。迁移时应保持这些接口的输入输出不变。
 
 Bangumi Access Token 由管理员绑定接口接收，并使用 Worker 加密密钥加密后保存在 D1；明文不会返回浏览器或写入日志。
+
+存储关联是 provider-neutral 的 `storage.v1` 交接边界。网站端不接受访问码、密码、token、Cookie 或 rclone 配置字段，也不直接上传/读取 MEGA 原图。OpenClaw 下载 Skill 在完成 rclone + MEGA 上传和完整校验后，通过 `/api/agent/storage` 写回 `provider`、`url`、`path`、`state`、`operationKey`、对象数量/字节数和 manifest SHA-256。未填写存储地址时，详情页将该区域保持折叠。
 
 影视元数据通过 Cloudflare Worker 环境变量 `TMDB_API_KEY` 读取。生产环境可使用 `npx wrangler secret put TMDB_API_KEY --config wrangler.jsonc` 写入；本地 Wrangler 使用项目根目录的 `.dev.vars` 提供同名变量。密钥不会写入数据库或返回给浏览器。
 

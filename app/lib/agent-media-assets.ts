@@ -1,9 +1,10 @@
 import { and, desc, eq, like, or } from "drizzle-orm";
 import { getDb } from "../../db";
 import { userSubjects } from "../../db/schema";
-import { parseMetadata, parseTags, presentSubject, sanitizeSubject } from "../api/media/route";
+import { mergeTags, parseMetadata, presentSubject, sanitizeSubject } from "../api/media/route";
 import { authenticateAgent, isAgentIdentity, requireAgentPermission, type AgentIdentity, type AgentPermission } from "./agent-auth";
 import { agentJson, finishAgentOperation, reserveAgentOperation } from "./agent-operations";
+import { appendGalleryImage, cleanupDeletedGalleryAssets, deleteGalleryImagesForSubjects, galleryImagesBySubjectIds, syncGalleryImages, type GalleryImageRow } from "./gallery-images";
 
 export type AgentAssetType = "visual" | "video";
 type AssetAction = "create" | "update" | "delete";
@@ -180,7 +181,7 @@ function rowInput(row: typeof userSubjects.$inferSelect) {
     globalScore: row.globalScore ?? undefined,
     source: row.source,
     collection: row.collection,
-    tags: parseTags(row.tags),
+    tags: mergeTags(row.tags, row.characterTags),
     musicAlbum: row.musicAlbum,
     musicArtist: row.musicArtist,
     lyricist: row.lyricist,
@@ -193,7 +194,7 @@ function rowInput(row: typeof userSubjects.$inferSelect) {
     pixivPid: row.pixivPid,
     author: row.author,
     twitterSource: row.twitterSource,
-    characterTags: parseTags(row.characterTags),
+    characterTags: [],
     metadata: parseMetadata(row.metadata),
   };
 }
@@ -208,8 +209,8 @@ function normalizedInput(type: AgentAssetType, body: Record<string, unknown>, ex
   return sanitizeSubject({ ...normalized, metadata, type, mediaType: type });
 }
 
-function assetWithAgent(row: typeof userSubjects.$inferSelect, type: AgentAssetType, agent: AgentIdentity["agent"]) {
-  return { ...presentSubject(row), assetType: type, managedBy: "openclaw", agent };
+function assetWithAgent(row: typeof userSubjects.$inferSelect, type: AgentAssetType, agent: AgentIdentity["agent"], images?: GalleryImageRow[]) {
+  return { ...presentSubject(row, images), assetType: type, managedBy: "openclaw", agent };
 }
 
 async function writeAsset(request: Request, identity: AgentIdentity, type: AgentAssetType, action: "create" | "update", body: Record<string, unknown>, id: number | null) {
@@ -246,19 +247,30 @@ async function writeAsset(request: Request, identity: AgentIdentity, type: Agent
     let status = 201;
     if (existing && id) {
       await db.update(userSubjects).set(next).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey), eq(userSubjects.type, type)));
-      row = { ...existing, ...next, id };
+      if (type === "visual") {
+        if (body.images !== undefined) await syncGalleryImages(db, identity.userKey, id, body.images);
+        else if (next.thumbnail && next.thumbnail !== existing.thumbnail) await appendGalleryImage(db, identity.userKey, id, { thumbnail: next.thumbnail, isCover: true });
+      }
+      [row] = await db.select().from(userSubjects).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey), eq(userSubjects.type, type))).limit(1);
+      if (!row) throw new Error("保存后的画廊记录无法读取");
       status = 200;
     } else {
       const [created] = await db.insert(userSubjects).values({ ...next, userKey: identity.userKey }).returning();
       if (!created) throw new Error("写入媒体记录失败");
-      row = created;
+      if (type === "visual") {
+        if (body.images !== undefined) await syncGalleryImages(db, identity.userKey, created.id, body.images);
+        else if (created.thumbnail) await appendGalleryImage(db, identity.userKey, created.id, { thumbnail: created.thumbnail, isCover: true });
+      }
+      [row] = await db.select().from(userSubjects).where(and(eq(userSubjects.id, created.id), eq(userSubjects.userKey, identity.userKey), eq(userSubjects.type, type))).limit(1);
+      if (!row) throw new Error("写入后的记录无法读取");
     }
+    const imageMap = await galleryImagesBySubjectIds(db, identity.userKey, type === "visual" ? [row.id] : []);
     const payload = {
       ok: true,
       source: "openclaw",
       agent: identity.agent,
       idempotencyKey: reservation.idempotencyKey,
-      [config.singular]: assetWithAgent(row, type, identity.agent),
+      [config.singular]: assetWithAgent(row, type, identity.agent, imageMap.get(row.id)),
     };
     await finishAgentOperation(reservation.id, status, payload);
     return agentJson(payload, status);
@@ -286,7 +298,7 @@ async function listAssets(request: Request, identity: AgentIdentity, type: Agent
     if (subtype) conditions.push(eq(type === "visual" ? userSubjects.visualSubtype : userSubjects.videoSubtype, subtype));
     if (status && STATUSES.includes(status as (typeof STATUSES)[number])) conditions.push(eq(userSubjects.status, status));
     if (collection) conditions.push(eq(userSubjects.collection, collection));
-    if (tag) conditions.push(like(userSubjects.tags, `%${tag.slice(0, 80)}%`));
+    if (tag) conditions.push(or(like(userSubjects.tags, `%${tag.slice(0, 80)}%`), like(userSubjects.characterTags, `%${tag.slice(0, 80)}%`))!);
     if (query) {
       const term = `%${query.slice(0, 80)}%`;
       conditions.push(or(
@@ -300,8 +312,10 @@ async function listAssets(request: Request, identity: AgentIdentity, type: Agent
         like(userSubjects.metadata, term),
       )!);
     }
-    const rows = await getDb().select().from(userSubjects).where(and(...conditions)).orderBy(desc(userSubjects.updatedAt));
-    const assets = rows.map((row) => assetWithAgent(row, type, identity.agent));
+    const db = getDb();
+    const rows = await db.select().from(userSubjects).where(and(...conditions)).orderBy(desc(userSubjects.updatedAt));
+    const imageMap = await galleryImagesBySubjectIds(db, identity.userKey, type === "visual" ? rows.map((row) => row.id) : []);
+    const assets = rows.map((row) => assetWithAgent(row, type, identity.agent, imageMap.get(row.id)));
     return agentJson({
       [config.plural]: assets,
       [config.singular]: Number.isInteger(id) && id > 0 ? assets[0] || null : undefined,
@@ -332,12 +346,22 @@ async function deleteAsset(request: Request, identity: AgentIdentity, type: Agen
   const reservation = await reserveAgentOperation(identity, { request, body, resource: config.resource, action: "delete", resourceId: id });
   if (reservation.kind !== "reserved") return reservation.response;
   try {
-    const deleted = await getDb().delete(userSubjects).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey), eq(userSubjects.type, type))).returning({ id: userSubjects.id });
+    const db = getDb();
+    const [existing] = await db.select().from(userSubjects).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey), eq(userSubjects.type, type))).limit(1);
+    if (!existing) {
+      const payload = { error: `${type === "visual" ? "画廊" : "视频"}记录不存在或无权删除` };
+      await finishAgentOperation(reservation.id, 404, payload);
+      return agentJson(payload, 404);
+    }
+    const imageUrls = type === "visual" ? await deleteGalleryImagesForSubjects(db, identity.userKey, [id]) : [];
+    const deleted = await db.delete(userSubjects).where(and(eq(userSubjects.id, id), eq(userSubjects.userKey, identity.userKey), eq(userSubjects.type, type))).returning({ id: userSubjects.id });
     if (!deleted.length) {
       const payload = { error: `${type === "visual" ? "画廊" : "视频"}记录不存在或无权删除` };
       await finishAgentOperation(reservation.id, 404, payload);
       return agentJson(payload, 404);
     }
+    if (existing.thumbnail) imageUrls.push(existing.thumbnail);
+    if (imageUrls.length) await cleanupDeletedGalleryAssets(db, identity.userKey, imageUrls);
     const payload = { ok: true, source: "openclaw", agent: identity.agent, idempotencyKey: reservation.idempotencyKey, deleted: { id, type } };
     await finishAgentOperation(reservation.id, 200, payload);
     return agentJson(payload);

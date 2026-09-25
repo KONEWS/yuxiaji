@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   try {
     const account = await loadAdminAccount();
     if (!account) return Response.json({ error: "管理员尚未初始化", code: "NOT_INITIALIZED" }, { status: 428 });
-    if (await loginFailureCount(request, username) >= 10) return Response.json({ error: "登录失败次数过多，请 15 分钟后重试" }, { status: 429 });
+    if (await loginFailureCount(username) >= 10) return Response.json({ error: "登录失败次数过多，请 15 分钟后重试" }, { status: 429 });
     const valid = username === account.username && await verifyPassword(password, account.passwordHash);
     if (!valid) {
       await writeAuthLog(request, "login_failed", { username });

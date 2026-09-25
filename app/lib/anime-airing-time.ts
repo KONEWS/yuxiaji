@@ -76,3 +76,13 @@ export function formatAiringCountdown(value: Date | string | number | null, now 
 export function formatWeekday(weekday: number) {
   return ["", "一", "二", "三", "四", "五", "六", "日"][weekday] || "";
 }
+
+/** Treat schedules beyond a normal cour as long-running. The provider data
+ * does not expose one universal flag, so use the known episode total or the
+ * next episode number as stable signals. */
+export function isLongRunningSchedule(metadata: Record<string, unknown> | null | undefined, nextEpisode?: number | null) {
+  const totalEpisodes = Number(metadata?.totalEpisodes);
+  const upcomingEpisode = Number(nextEpisode);
+  return (Number.isFinite(totalEpisodes) && totalEpisodes > 24)
+    || (Number.isFinite(upcomingEpisode) && upcomingEpisode > 24);
+}
