@@ -1,0 +1,13 @@
+{
+  "name": "yuexiaji-airing-test",
+  "main": "airing-worker.mjs",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "YUEXIAJI_NOVA_TOKEN": "test-nova-token",
+    "YUEXIAJI_HIKARI_TOKEN": "test-hikari-token",
+    "DEFAULT_USER_ID": "airing-test-owner",
+    "YUEXIAJI_CREDENTIALS_ENCRYPTION_KEY": "isolated-airing-test-encryption-key"
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "airing-test", "database_id": "00000000-0000-0000-0000-000000000002" }]
+}

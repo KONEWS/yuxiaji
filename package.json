@@ -10,10 +10,15 @@
     "dev": "vite",
     "build": "node scripts/build-verified.mjs",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/media-storage-links.test.ts",
-    "test:storage": "node --test tests/media-storage-links.test.ts",
+    "check": "tsc --noEmit && npm run lint",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/media-storage-links.test.ts tests/storage-api.test.mjs tests/airing-api.test.mjs",
+    "test:storage": "node --test tests/media-storage-links.test.ts tests/storage-api.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:remote": "wrangler d1 migrations apply yuexiaji-db --remote --config wrangler.jsonc",
+    "db:tables:remote": "wrangler d1 execute yuexiaji-db --remote --command \"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;\" --config wrangler.jsonc",
+    "deploy:built": "npm run db:migrate:remote && npm run db:tables:remote && wrangler deploy --config wrangler.jsonc",
+    "deploy": "npm run check && npm test && npm run deploy:built"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

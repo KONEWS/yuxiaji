@@ -18,6 +18,7 @@ export async function GET(request: Request) {
       video: "/api/agent/video",
       storage: "/api/agent/storage",
       bangumiSync: "/api/agent/sync",
+      animeAiring: "/api/agent/anime/airing",
     },
   }, { headers: { "cache-control": "no-store" } });
 }

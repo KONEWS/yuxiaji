@@ -4,9 +4,23 @@ import { unstable_dev } from "wrangler";
 
 let worker;
 
+async function uploadRequest(form) {
+  // unstable_dev's fetch proxy doesn't preserve Node FormData boundaries.
+  // Serialize it explicitly so the Worker receives a real multipart request.
+  const request = new Request("http://localhost/api/agent/gallery/upload", { method: "POST", body: form });
+  return worker.fetch("/api/agent/gallery/upload", {
+    method: "POST",
+    headers: { "content-type": request.headers.get("content-type") },
+    body: await request.arrayBuffer(),
+  });
+}
+
 before(async () => {
   worker = await unstable_dev("dist/server/index.js", {
     config: "wrangler.jsonc",
+    envFiles: ["tests/fixtures/.env.test"],
+    local: true,
+    persist: false,
     logLevel: "error",
     experimental: {
       disableExperimentalWarning: true,
@@ -45,4 +59,23 @@ test("redirects an unauthenticated home request to login", async () => {
   assert.equal(response.status, 302);
   assert.ok(location);
   assert.equal(new URL(location).pathname, "/login");
+});
+
+test("multipart API uploads larger than 1 MiB reach Agent authentication", async () => {
+  const form = new FormData();
+  form.set("image", new Blob([new Uint8Array(1200000)], { type: "image/png" }), "large.png");
+  form.set("idempotencyKey", "upload-size-auth-probe");
+  const response = await uploadRequest(form);
+
+  assert.equal(response.status, 401);
+  assert.match(response.headers.get("content-type") ?? "", /^application\/json\b/i);
+  assert.ok((await response.json()).error);
+});
+
+test("multipart requests above the 21 MiB framework limit are rejected", async () => {
+  const form = new FormData();
+  form.set("image", new Blob([new Uint8Array(21 * 1024 * 1024 + 1)], { type: "image/png" }), "oversized.png");
+  const response = await uploadRequest(form);
+
+  assert.equal(response.status, 413);
 });

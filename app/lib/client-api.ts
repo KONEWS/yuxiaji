@@ -101,8 +101,8 @@ export type MediaStorageLink = {
   isPrimary?: boolean;
   state?: StorageLinkState;
   operationKey?: string;
-  objectCount?: number;
-  totalBytes?: number;
+  objectCount?: number | null;
+  totalBytes?: number | null;
   manifestSha256?: string;
   verifiedAt?: number | null;
   note?: string;

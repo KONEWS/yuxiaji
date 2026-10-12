@@ -95,14 +95,22 @@ npm run db:generate
 ## 检查与部署
 
 ```bash
-npx tsc --noEmit
-npm run lint
+npm run check
 npm test
-npm run build
-npx wrangler deploy --config wrangler.jsonc
+npm run deploy:built
 ```
 
-`npm test` 会先构建，再运行存储链接/画廊分批查询测试与本地 Cloudflare Worker 登录页测试。生产密钥使用 `wrangler secret put` 配置，不要写入 `wrangler.jsonc`；`dist/server/wrangler.json` 是构建中间产物，生产命令使用根配置。
+`npm test` 会先构建，再运行存储链接/画廊分批查询、存储 API、Agent 放送代理与本地 Cloudflare Worker 登录页测试。`npm run deploy:built` 按项目要求先应用远端 D1 迁移，再查询表名，最后部署已验证的 Worker。也可执行 `npm run deploy` 一次完成检查、构建、测试和生产部署。
+
+生产密钥使用 `wrangler secret put` 配置，不要写入 `wrangler.jsonc`；`dist/server/wrangler.json` 是构建中间产物，生产命令使用根配置。根配置已固定当前生产账户，避免多个 Cloudflare 账户时部署到错误目标。
+
+## GitHub 与后续更新
+
+完整源码仓库：[KONEWS/yuxiaji](https://github.com/KONEWS/yuxiaji)，生产分支为 `master`。GitHub Actions 会检查每次推送和 Pull Request；`master` 检查通过后，使用同一次运行已测试的构建部署 Cloudflare。
+
+首次自动部署需要在 GitHub Actions 配置 `CLOUDFLARE_API_TOKEN` Secret 与 `CLOUDFLARE_ACCOUNT_ID` Variable。配置方法、自动/手动部署和后续 Agent 操作步骤见 [GitHub 与 Cloudflare 部署说明](docs/GITHUB_CLOUDFLARE.md)。后续 ChatGPT/Codex 在具备仓库写入权限的环境中，可读取 `AGENTS.md` 后修改、测试并提交；合并或推送到 `master` 即可触发部署。
+
+GitHub 保存源码、迁移和协作说明；D1 数据、R2 图片与生产密钥保留在 Cloudflare。`.dev.vars.example` 提供本地配置字段示例，真实 `.dev.vars`、构建产物和备份不提交。
 
 ## 主要目录
 

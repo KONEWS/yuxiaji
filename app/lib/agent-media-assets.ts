@@ -5,6 +5,7 @@ import { mergeTags, parseMetadata, presentSubject, sanitizeSubject } from "../ap
 import { authenticateAgent, isAgentIdentity, requireAgentPermission, type AgentIdentity, type AgentPermission } from "./agent-auth";
 import { agentJson, finishAgentOperation, reserveAgentOperation } from "./agent-operations";
 import { appendGalleryImage, cleanupDeletedGalleryAssets, deleteGalleryImagesForSubjects, galleryImagesBySubjectIds, syncGalleryImages, type GalleryImageRow } from "./gallery-images";
+import { mediaStorageLinksByMediaIds } from "./media-storage-link-store";
 
 export type AgentAssetType = "visual" | "video";
 type AssetAction = "create" | "update" | "delete";
@@ -209,8 +210,8 @@ function normalizedInput(type: AgentAssetType, body: Record<string, unknown>, ex
   return sanitizeSubject({ ...normalized, metadata, type, mediaType: type });
 }
 
-function assetWithAgent(row: typeof userSubjects.$inferSelect, type: AgentAssetType, agent: AgentIdentity["agent"], images?: GalleryImageRow[]) {
-  return { ...presentSubject(row, images), assetType: type, managedBy: "openclaw", agent };
+function assetWithAgent(row: typeof userSubjects.$inferSelect, type: AgentAssetType, agent: AgentIdentity["agent"], images?: GalleryImageRow[], storageLinks?: unknown[]) {
+  return { ...presentSubject(row, images, storageLinks), assetType: type, managedBy: "openclaw", agent };
 }
 
 async function writeAsset(request: Request, identity: AgentIdentity, type: AgentAssetType, action: "create" | "update", body: Record<string, unknown>, id: number | null) {
@@ -265,12 +266,13 @@ async function writeAsset(request: Request, identity: AgentIdentity, type: Agent
       if (!row) throw new Error("写入后的记录无法读取");
     }
     const imageMap = await galleryImagesBySubjectIds(db, identity.userKey, type === "visual" ? [row.id] : []);
+    const storageMap = await mediaStorageLinksByMediaIds(db, identity.userKey, [row.id]);
     const payload = {
       ok: true,
       source: "openclaw",
       agent: identity.agent,
       idempotencyKey: reservation.idempotencyKey,
-      [config.singular]: assetWithAgent(row, type, identity.agent, imageMap.get(row.id)),
+      [config.singular]: assetWithAgent(row, type, identity.agent, imageMap.get(row.id), storageMap.get(row.id)),
     };
     await finishAgentOperation(reservation.id, status, payload);
     return agentJson(payload, status);
@@ -315,7 +317,8 @@ async function listAssets(request: Request, identity: AgentIdentity, type: Agent
     const db = getDb();
     const rows = await db.select().from(userSubjects).where(and(...conditions)).orderBy(desc(userSubjects.updatedAt));
     const imageMap = await galleryImagesBySubjectIds(db, identity.userKey, type === "visual" ? rows.map((row) => row.id) : []);
-    const assets = rows.map((row) => assetWithAgent(row, type, identity.agent, imageMap.get(row.id)));
+    const storageMap = await mediaStorageLinksByMediaIds(db, identity.userKey, rows.map((row) => row.id));
+    const assets = rows.map((row) => assetWithAgent(row, type, identity.agent, imageMap.get(row.id), storageMap.get(row.id)));
     return agentJson({
       [config.plural]: assets,
       [config.singular]: Number.isInteger(id) && id > 0 ? assets[0] || null : undefined,

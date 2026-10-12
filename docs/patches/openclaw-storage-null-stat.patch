@@ -1,0 +1,48 @@
+--- a/social-image-downloader/scripts/storage_adapter.py
++++ b/social-image-downloader/scripts/storage_adapter.py
+@@ -196,6 +196,10 @@
+             value = json.loads(result.stdout)
+         except json.JSONDecodeError as exc:
+             raise StorageAdapterError("rclone stat 返回无效 JSON") from exc
++        # rclone lsjson --stat returns JSON null with exit code 0 for
++        # a missing MEGA object. Nonzero failures were handled above.
++        if value is None:
++            return {"state": "missing", "objectKey": key}
+         if not isinstance(value, dict) or value.get("IsDir") is True:
+             raise StorageAdapterError("远端目标不是普通文件", conflict=True)
+         return {
+--- a/social-image-downloader/scripts/storage_adapter_selftest.py
++++ b/social-image-downloader/scripts/storage_adapter_selftest.py
+@@ -81,6 +81,32 @@
+             result = adapter.stat("originals/pixiv/1/a.png")
+         self.assertEqual(result["state"], "indeterminate")
+ 
++    def test_successful_null_stat_is_missing(self):
++        adapter = storage_adapter.RcloneStorageAdapter("mega", binary="rclone-test")
++        missing = subprocess.CompletedProcess([], 0, "null\n", "")
++        with mock.patch.object(adapter, "_run", return_value=missing):
++            result = adapter.stat("originals/pixiv/1/a.png")
++        self.assertEqual(result["state"], "missing")
++
++    def test_failed_null_stat_is_indeterminate(self):
++        adapter = storage_adapter.RcloneStorageAdapter("mega", binary="rclone-test")
++        failed = subprocess.CompletedProcess([], 1, "null\n", "temporary failure")
++        with mock.patch.object(adapter, "_run", return_value=failed):
++            result = adapter.stat("originals/pixiv/1/a.png")
++        self.assertEqual(result["state"], "indeterminate")
++
++    def test_existing_stat_is_present_and_directory_is_rejected(self):
++        adapter = storage_adapter.RcloneStorageAdapter("mega", binary="rclone-test")
++        existing = subprocess.CompletedProcess([], 0, '{"IsDir":false,"Size":17,"ID":"object-1"}', "")
++        with mock.patch.object(adapter, "_run", return_value=existing):
++            result = adapter.stat("originals/pixiv/1/a.png")
++        self.assertEqual(result["state"], "present")
++        self.assertEqual(result["size"], 17)
++        directory = subprocess.CompletedProcess([], 0, '{"IsDir":true,"Size":-1}', "")
++        with mock.patch.object(adapter, "_run", return_value=directory):
++            with self.assertRaises(storage_adapter.StorageAdapterError):
++                adapter.stat("originals/pixiv/1/a.png")
++
+     def test_backend_type_must_match_exactly(self):
+         adapter = storage_adapter.RcloneStorageAdapter("yuexiaji-mega", binary="rclone-test")
+         mega = subprocess.CompletedProcess([], 0, "[yuexiaji-mega]\ntype = mega\n", "")

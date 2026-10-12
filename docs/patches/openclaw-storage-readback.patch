@@ -1,0 +1,128 @@
+--- a/yuexiaji-manager/scripts/yuexiaji.py
++++ b/yuexiaji-manager/scripts/yuexiaji.py
+@@ -7,7 +7,7 @@
+ 仅允许 Agent: nova（管理员）、hikari（媒体收藏管理）。
+ """
+ import argparse
+-from datetime import datetime
++from datetime import datetime, timezone
+ from decimal import Decimal
+ import hashlib
+ import json
+@@ -21,7 +21,7 @@
+ import urllib.request
+ import uuid
+ 
+-VERSION = "2.5.0"
++VERSION = "2.5.1"
+ # Cloudflare Bot Fight 会拦截脚本风格 UA（如 yuexiaji-manager/1.0.0），
+ # 因此使用通用浏览器 UA；服务端 Agent 身份只依赖 Agent token，不依赖 UA/提示头。
+ DEFAULT_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+@@ -1088,6 +1088,27 @@
+         verification_failed(plan, rid, str(exc))
+ 
+ 
++def storage_readback_matches(key, actual, wanted):
++    if key != "verifiedAt" or actual == wanted:
++        return actual == wanted
++    def milliseconds(value):
++        if isinstance(value, bool) or value is None:
++            raise ValueError("invalid timestamp")
++        if isinstance(value, (int, float)):
++            if not math.isfinite(value) or value < 0 or value != int(value):
++                raise ValueError("invalid timestamp")
++            return int(value)
++        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
++        if parsed.tzinfo is None:
++            raise ValueError("timestamp needs timezone")
++        delta = parsed.astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
++        return (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
++    try:
++        return milliseconds(actual) == milliseconds(wanted)
++    except (ValueError, TypeError, AttributeError, OverflowError):
++        return False
++
++
+ def verify_storage_write(opts, token, base, plan, data):
+     body = plan["body"]
+     rid = body.get("id")
+@@ -1101,7 +1122,7 @@
+         if row is None:
+             raise CliError("存储链接未在目标媒体下查到", EXIT_SERVER)
+         for key, wanted in body.items():
+-            if key not in row or row[key] != wanted:
++            if key not in row or not storage_readback_matches(key, row[key], wanted):
+                 raise CliError("存储链接回读字段 %s 与预期不一致" % key, EXIT_SERVER)
+         return row
+     except CliError as exc:
+--- a/yuexiaji-manager/scripts/selftest.py
++++ b/yuexiaji-manager/scripts/selftest.py
+@@ -640,6 +640,30 @@
+ 
+ 
+ class StorageContractTests(Base):
++    def test_storage_write_requires_all_fields_with_equivalent_iso_readback(self):
++        payload = {"provider": "mega", "path": "archive/811", "url": "https://mega.nz/folder/example#key", "state": "verified", "verifiedAt": "2026-09-02T00:00:00Z"}
++        expected = {**payload, "id": 7, "mediaId": 811, "verifiedAt": 1788307200000}
++        missing_state = {key: value for key, value in expected.items() if key != "state"}
++        for row, wanted_code in [(expected, 0), (missing_state, 4), ({**expected, "verifiedAt": 1788307200001}, 4)]:
++            def api(req, retries=0, idem_key=None):
++                if req.get_method() == "POST":
++                    return response({"storageLink": {"id": 7}}, 201)
++                return response({"storageLinks": [row]})
++            with mock.patch.object(Y, "_http_call", side_effect=api):
++                code, out, err = run_cli(["--agent", "nova", "storage", "create", "811", "--payload", json.dumps(payload)])
++            self.assertEqual(code, wanted_code, err)
++            if code == 0:
++                self.assertTrue(json.loads(out)["verified"])
++
++    def test_storage_readback_compares_equivalent_timestamp_formats(self):
++        self.assertTrue(Y.storage_readback_matches("verifiedAt", 1788307200000, "2026-09-02T00:00:00Z"))
++        self.assertTrue(Y.storage_readback_matches("verifiedAt", 1788307200123, "2026-09-02T08:00:00.123+08:00"))
++        self.assertFalse(Y.storage_readback_matches("verifiedAt", 1788307200124, "2026-09-02T00:00:00.123Z"))
++        self.assertFalse(Y.storage_readback_matches("verifiedAt", 1788307200, "2026-09-02T00:00:00Z"))
++        self.assertFalse(Y.storage_readback_matches("verifiedAt", None, "2026-09-02T00:00:00Z"))
++        self.assertFalse(Y.storage_readback_matches("verifiedAt", 1788307200000, "2026-09-02T00:00:00"))
++        self.assertFalse(Y.storage_readback_matches("state", "linked", "verified"))
++
+     def test_storage_routes_and_all_supported_fields(self):
+         payload = {
+             "provider": " MEGA ",
+--- a/yuexiaji-manager/SKILL.md
++++ b/yuexiaji-manager/SKILL.md
+@@ -6,7 +6,7 @@
+ # Yuexiaji Manager
+ 
+ Use `scripts/yuexiaji.py` for every Yuexiaji operation. Do not access its database, admin UI, or internal files directly.
+-This package's CLI version is `2.5.0`; check it with `--version` after replacing a deployed copy.
++This package's CLI version is `2.5.1`; check it with `--version` after replacing a deployed copy.
+ 
+ This Skill reads and writes Yuexiaji collection records and provider-neutral storage-link metadata. It does
+ not download Twitter/X or Pixiv images, retain or return originals, create display renditions, or operate
+@@ -176,3 +176,7 @@
+ ## Errors
+ 
+ Exit codes: `0` success, `2` usage/configuration, `3` client permission denial, `4` network/uncertain result, `5` server response error. Stop on 401/403 and inspect `capabilities`; do not retry around authorization failures.
++
++## Storage timestamp readback (2.5.1)
++
++The server accepts timezone-qualified ISO 8601 verification times and Unix milliseconds, then reads back milliseconds. The CLI compares equivalent instants for `verifiedAt`; every other requested field must still match, and missing lifecycle fields remain a verification failure. Apply the server storage lifecycle migration before relying on this contract.
+--- a/yuexiaji-manager/references/API.md
++++ b/yuexiaji-manager/references/API.md
+@@ -84,7 +84,7 @@
+ different explicit catalog ID remains distinct even when its title is the
+ same. Use `media update <id>` after inspecting an actual match.
+ 
+-### Client write verification (2.5.0)
++### Client write verification (2.5.1)
+ 
+ For media/gallery/video create/update and per-media tag changes, the client requires a positive,
+ consistent response ID, then GETs that exact ID. It checks type and the supplied supported fields,
+@@ -239,3 +239,7 @@
+ ## Errors
+ 
+ The current routes usually return a flat JSON error such as `{"error":"..."}` and may include `details`. The client also accepts a nested error envelope for compatibility. A non-JSON response is treated as a server error.
++
++### Verification timestamp representation
++
++`verifiedAt` accepts a timezone-qualified ISO 8601 timestamp or a Unix millisecond integer; GET returns Unix milliseconds (or null when unknown). CLI 2.5.1 accepts equivalent ISO and millisecond readback values. It does not skip missing fields or permit mismatched verification times.

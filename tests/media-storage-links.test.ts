@@ -4,6 +4,7 @@ import {
   MediaStorageLinkValidationError,
   normalizeMediaStorageUrl,
   sanitizeMediaStorageLink,
+  presentMediaStorageLink,
 // @ts-expect-error Node's native TypeScript loader requires an explicit extension.
 } from "../app/lib/media-storage-links.ts";
 // @ts-expect-error Node's native TypeScript loader requires an explicit extension.
@@ -26,6 +27,12 @@ test("normalizes provider, label and absolute web URL", () => {
     path: "/Media/Show",
     isPrimary: true,
     note: "mirror",
+    state: "linked",
+    operationKey: "",
+    objectCount: null,
+    totalBytes: null,
+    manifestSha256: "",
+    verifiedAt: null,
   });
 });
 
@@ -82,6 +89,42 @@ test("merges a partial update with existing values", () => {
   assert.equal(updated.path, previous.path);
   assert.equal(updated.isPrimary, true);
   assert.equal(updated.note, "new");
+});
+
+test("preserves lifecycle fields through sanitization and presentation", () => {
+  const lifecycle = {
+    state: "verified",
+    operationKey: "archive-839-v1",
+    objectCount: 23,
+    totalBytes: 630269,
+    manifestSha256: "a".repeat(64),
+    verifiedAt: 1790899200123,
+  };
+  const input = sanitizeMediaStorageLink({ provider: "mega", path: "/archive", ...lifecycle });
+  for (const [key, value] of Object.entries(lifecycle)) {
+    assert.equal(input[key as keyof typeof input], value);
+  }
+  const updated = sanitizeMediaStorageLink({ note: "edited in browser" }, input);
+  const presented = presentMediaStorageLink({ ...updated, id: 42, mediaId: 839, userKey: "owner", verifiedAt: new Date(lifecycle.verifiedAt), createdAt: 1, updatedAt: 2 });
+  for (const [key, value] of Object.entries(lifecycle)) {
+    assert.equal(presented[key as keyof typeof presented], value);
+  }
+  assert.equal(sanitizeMediaStorageLink({ verifiedAt: null, objectCount: null, totalBytes: 0 }, input).verifiedAt, null);
+  assert.equal(sanitizeMediaStorageLink({ objectCount: null }, input).objectCount, null);
+  assert.equal(sanitizeMediaStorageLink({ totalBytes: 0 }, input).totalBytes, 0);
+  assert.equal(sanitizeMediaStorageLink({ verifiedAt: "2026-10-02T08:00:00.123+08:00" }, input).verifiedAt, Date.parse("2026-10-02T00:00:00.123Z"));
+});
+
+test("rejects malformed lifecycle metadata instead of silently discarding it", () => {
+  for (const patch of [
+    { state: "active" }, { operationKey: "x".repeat(257) },
+    { objectCount: -1 }, { objectCount: 1.5 }, { objectCount: "23" },
+    { totalBytes: Number.MAX_SAFE_INTEGER + 1 }, { totalBytes: true },
+    { manifestSha256: "z".repeat(64) }, { manifestSha256: "abc" },
+    { verifiedAt: -1 }, { verifiedAt: "2026-10-02" }, { verifiedAt: 8640000000000001 },
+  ]) {
+    assert.throws(() => sanitizeMediaStorageLink({ provider: "mega", path: "/archive", ...patch }), MediaStorageLinkValidationError);
+  }
 });
 
 function storageRow(mediaId: number, id: number, isPrimary = false, userKey = "user-a") {

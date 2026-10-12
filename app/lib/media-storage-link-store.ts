@@ -92,6 +92,7 @@ export async function createMediaStorageLink(db: Database, userKey: string, medi
   const now = new Date();
   const createValues = {
     ...input,
+    verifiedAt: input.verifiedAt === null ? null : new Date(input.verifiedAt),
     userKey,
     mediaId,
     isPrimary,
@@ -137,6 +138,12 @@ export async function updateMediaStorageLink(db: Database, userKey: string, medi
     path: existing.path,
     isPrimary: Boolean(existing.isPrimary),
     note: existing.note,
+    state: existing.state as MediaStorageLinkInput["state"],
+    operationKey: existing.operationKey,
+    objectCount: existing.objectCount,
+    totalBytes: existing.totalBytes,
+    manifestSha256: existing.manifestSha256,
+    verifiedAt: existing.verifiedAt?.getTime() ?? null,
   };
   let input: MediaStorageLinkInput;
   try {
@@ -145,7 +152,7 @@ export async function updateMediaStorageLink(db: Database, userKey: string, medi
     normalizeStoreError(error);
   }
   const replacement = links.find((row) => row.id !== id);
-  const next = { ...input, isPrimary: input.isPrimary || !replacement, updatedAt: new Date() };
+  const next = { ...input, verifiedAt: input.verifiedAt === null ? null : new Date(input.verifiedAt), isPrimary: input.isPrimary || !replacement, updatedAt: new Date() };
   if (next.isPrimary) {
     const [, updatedRows] = await db.batch([
       db.update(mediaStorageLinks).set({ isPrimary: false, updatedAt: next.updatedAt }).where(and(

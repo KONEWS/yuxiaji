@@ -169,6 +169,13 @@
       "when": 1788313963975,
       "tag": "0023_classy_jetstream",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1790939418822,
+      "tag": "0024_salty_nightshade",
+      "breakpoints": true
     }
   ]
 }

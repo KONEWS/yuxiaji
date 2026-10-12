@@ -1,0 +1,166 @@
+--- a/yuexiaji-anime-airing/scripts/anime_airing.py
++++ b/yuexiaji-anime-airing/scripts/anime_airing.py
+@@ -14,6 +14,7 @@
+ import difflib
+ import fcntl
+ import hashlib
++import importlib.util
+ import json
+ import os
+ from pathlib import Path
+@@ -28,7 +29,7 @@
+ from zoneinfo import ZoneInfo
+ 
+ 
+-VERSION = "1.3.0"
++VERSION = "1.3.1"
+ SCHEMA_VERSION = 1
+ DEFAULT_TIMEZONE = "Asia/Hong_Kong"
+ DEFAULT_DAY_BOUNDARY_HOUR = 6
+@@ -434,8 +435,39 @@
+     return rows
+ 
+ 
+-def fetch_animeschedule(now: dt.datetime, token: str) -> list[dict]:
++def fetch_animeschedule_proxy(now: dt.datetime, agent: str, yuexiaji_script: Path) -> list[dict]:
++    """Reuse manager authentication; the third-party token stays in the Worker."""
++    spec = importlib.util.spec_from_file_location("yuexiaji_airing_client", yuexiaji_script)
++    if not spec or not spec.loader:
++        raise SourceError("无法载入月下集客户端")
++    client = importlib.util.module_from_spec(spec)
++    try:
++        spec.loader.exec_module(client)
++        client.validate_agent_binding(agent)
++        base = client.resolve_base_url(None)
++        if not base:
++            raise SourceError("月下集未配置 API 根地址")
++        client.validate_base_url(base)
++        token = client.resolve_token(agent)
++        if not token:
++            raise SourceError("月下集未配置 Agent 凭据")
++    except SourceError:
++        raise
++    except Exception as exc:
++        raise SourceError("无法读取月下集客户端配置") from exc
++    payload = request_json(
++        base.rstrip("/") + "/anime/airing?source=animeschedule&tz=Asia%2FTokyo",
++        headers={"authorization": f"Bearer {token}"},
++    )
++    if not isinstance(payload, dict) or payload.get("source") != "animeschedule" or not isinstance(payload.get("items"), list):
++        raise SourceError("月下集放送代理未返回有效 AnimeSchedule 日程")
++    return animeschedule_rows(payload["items"], now)
++
++
++def fetch_animeschedule(now: dt.datetime, token: str, *, agent=None, yuexiaji_script=None) -> list[dict]:
+     if not token:
++        if agent and yuexiaji_script:
++            return fetch_animeschedule_proxy(now, agent, yuexiaji_script)
+         raise SourceError("未配置 Application Token")
+     payload = request_json(
+         "https://animeschedule.net/api/v3/timetables/raw?tz=Asia%2FTokyo",
+@@ -793,7 +825,7 @@
+         fetchers = {
+             "bangumi": lambda: fetch_bangumi(now),
+             "anilist": lambda: fetch_anilist(now, args.anilist_pages),
+-            "animeschedule": lambda: fetch_animeschedule(now, read_token(args)),
++            "animeschedule": lambda: fetch_animeschedule(now, read_token(args), agent=args.agent, yuexiaji_script=yuexiaji_script),
+         }
+         for source in SOURCE_NAMES:
+             if source in disabled:
+--- a/yuexiaji-anime-airing/scripts/selftest.py
++++ b/yuexiaji-anime-airing/scripts/selftest.py
+@@ -338,6 +338,63 @@
+         self.assertEqual(A.find_subject_key(state, 697), "local:697")
+ 
+ 
++class AnimeScheduleProxyTests(unittest.TestCase):
++    def client_script(self, directory, bound="hikari"):
++        path = Path(directory) / "yuexiaji.py"
++        path.write_text(
++            "def validate_agent_binding(agent):\n"
++            f"    if agent != {bound!r}: raise ValueError('wrong agent')\n"
++            "def resolve_base_url(arg): return 'https://yuexiaji.example/api/agent'\n"
++            "def validate_base_url(url):\n"
++            "    if url != 'https://yuexiaji.example/api/agent': raise ValueError('wrong base')\n"
++            "def resolve_token(agent): return 'isolated-agent-token'\n",
++            encoding="utf-8",
++        )
++        return path
++
++    def test_missing_application_token_uses_authenticated_worker_proxy(self):
++        when = NOW + dt.timedelta(hours=6)
++        payload = {"ok": True, "source": "animeschedule", "credentialSource": "settings", "items": [{
++            "id": "test-anime", "route": "test-anime", "title": "Test Anime",
++            "episodeDate": A.iso_utc(when), "episodeNumber": 8,
++        }]}
++        with tempfile.TemporaryDirectory() as directory:
++            client = self.client_script(directory)
++            with mock.patch.object(A, "request_json", return_value=payload) as request:
++                rows = A.fetch_animeschedule(NOW, "", agent="hikari", yuexiaji_script=client)
++        request.assert_called_once_with(
++            "https://yuexiaji.example/api/agent/anime/airing?source=animeschedule&tz=Asia%2FTokyo",
++            headers={"authorization": "Bearer isolated-agent-token"},
++        )
++        self.assertEqual(rows[0]["source"], "animeschedule")
++        self.assertEqual(rows[0]["nextEpisode"], 8)
++        self.assertNotIn("isolated-agent-token", json.dumps(rows))
++
++    def test_explicit_application_token_keeps_direct_upstream(self):
++        with mock.patch.object(A, "request_json", return_value=[]) as request, \
++             mock.patch.object(A, "fetch_animeschedule_proxy") as proxy:
++            self.assertEqual(A.fetch_animeschedule(NOW, "isolated-application-token", agent="hikari", yuexiaji_script=Path("/unused")), [])
++        proxy.assert_not_called()
++        self.assertEqual(request.call_args.kwargs["headers"]["authorization"], "Bearer isolated-application-token")
++        self.assertTrue(request.call_args.args[0].startswith("https://animeschedule.net/api/v3/timetables/raw?"))
++
++    def test_agent_binding_denies_cross_agent_proxy_access(self):
++        with tempfile.TemporaryDirectory() as directory:
++            client = self.client_script(directory, bound="hikari")
++            with mock.patch.object(A, "request_json") as request:
++                with self.assertRaises(A.SourceError):
++                    A.fetch_animeschedule(NOW, "", agent="nova", yuexiaji_script=client)
++        request.assert_not_called()
++
++    def test_proxy_rejects_wrong_provider_and_malformed_items(self):
++        with tempfile.TemporaryDirectory() as directory:
++            client = self.client_script(directory)
++            for payload in ({"source": "other", "items": []}, {"source": "animeschedule", "items": {}}):
++                with mock.patch.object(A, "request_json", return_value=payload):
++                    with self.assertRaises(A.SourceError):
++                        A.fetch_animeschedule(NOW, "", agent="hikari", yuexiaji_script=client)
++
++
+ class RefreshIntegrationTests(unittest.TestCase):
+     def setUp(self):
+         self.temp = tempfile.TemporaryDirectory()
+--- a/yuexiaji-anime-airing/SKILL.md
++++ b/yuexiaji-anime-airing/SKILL.md
+@@ -19,7 +19,7 @@
+ - 月下集是追番记录的唯一主数据源。只通过 `yuexiaji-manager` 的 Agent API 客户端读取 `type=anime,status=watching`；禁止读取月下集数据库、后台文件或浏览器管理接口。
+ - 本 Skill 只允许由 `hikari` 或 `nova` 使用。默认使用 `hikari`。其他 Agent 收到请求时，必须转交 Hikari，不得复制月下集 Token 或状态文件。
+ - 本地仅保存月下集只读快照、日程观测、证据链接、官网核验和已推送回执；不得把它当作可编辑的第二套追番库。
+-- 不把 Token 写进提示词、命令输出、日志或状态。月下集凭据由 `yuexiaji-manager` 管理；AnimeSchedule Token 只从 `ANIMESCHEDULE_TOKEN` 或权限受控的 Token 文件读取。
++- 不把 Token 写进提示词、命令输出、日志或状态。月下集凭据由 `yuexiaji-manager` 管理；本机可选 AnimeSchedule Token 只从 `ANIMESCHEDULE_TOKEN` 或权限受控的 Token 文件读取。缺少本机 Token 时，复用 manager 的 Agent 认证访问固定 `/api/agent/anime/airing?source=animeschedule`，由月下集 Worker 使用账户集成中已保存的加密凭据；第三方 Token 不离开 Worker。
+ 
+ ## 标准流程
+ 
+@@ -35,7 +35,7 @@
+ 
+ - Bangumi 放送日历：用 Bangumi `subjectId` 精确关联；
+ - AniList：提供下一话的精确时间和集数；
+-- AnimeSchedule：配置 Application Token 后作为第三个精确信源；未配置时自动降级，不阻断前两个来源。
++- AnimeSchedule：优先使用本机可选 Application Token，否则通过月下集 Agent 放送代理使用账户集成的凭据，作为第三个精确信源；两处均未配置时自动降级，不阻断前两个来源。
+ 
+ 使用返回值 `digest.text` 作为渠道正文。正文中的更新、预告和核验采用紧凑 Markdown 表格；不支持 Markdown 表格的 QQ、微信或 Telegram 客户端仍会显示为可读的管道分栏文本。必须原样发送，不要让 Agent 按渠道重排、翻译或改写表格。默认输出时区是 `Asia/Hong_Kong`。时间指节目放送或来源标注的发布时刻，不承诺字幕组或具体流媒体平台在同一时刻可看。
+ 
+--- a/yuexiaji-anime-airing/references/SOURCE_POLICY.md
++++ b/yuexiaji-anime-airing/references/SOURCE_POLICY.md
+@@ -7,7 +7,7 @@
+ | 月下集 | 本地 Agent API | 用户正在追的动画、进度、Bangumi subjectId | 唯一追番主数据源，不提供放送结论 |
+ | Bangumi Calendar | subjectId 精确匹配 | 在播星期，部分条目含时间或下一话 | 没有时刻时只能说“星期已确认” |
+ | AniList | 已保存 ID或严格标题匹配 | 下一话 Unix 时间、集数 | 单独命中时标为 `probable` |
+-| AnimeSchedule | 已保存 ID或严格标题匹配 | timetable 时间、集数 | 需要独立 Application Token；单独命中时标为 `probable` |
++| AnimeSchedule | 已保存 ID或严格标题匹配 | timetable 时间、集数 | 使用本机可选 Application Token，或月下集 Worker 中已加密保存的凭据；单独命中时标为 `probable` |
+ | 官方来源 | 官网、制作委员会、电视台或正版平台播出页 | 延期、改期、特别篇和最终播出时间 | 必须保存 HTTPS 证据链接和核验时间 |
+ 
+ ## 自动判定

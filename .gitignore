@@ -29,7 +29,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
-.dev.vars
+.dev.vars*
+!.dev.vars.example
+!tests/fixtures/.env.test
 
 # vercel
 .vercel
@@ -42,3 +44,7 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+
+# Python caches
+__pycache__/
+*.pyc

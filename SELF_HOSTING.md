@@ -37,6 +37,23 @@ Bangumi Access Token 由管理员绑定接口接收，并使用 Worker 加密密
 
 存储关联是 provider-neutral 的 `storage.v1` 交接边界。网站端不接受访问码、密码、token、Cookie 或 rclone 配置字段，也不直接上传/读取 MEGA 原图。OpenClaw 下载 Skill 在完成 rclone + MEGA 上传和完整校验后，通过 `/api/agent/storage` 写回 `provider`、`url`、`path`、`state`、`operationKey`、对象数量/字节数和 manifest SHA-256。未填写存储地址时，详情页将该区域保持折叠。
 
+归档生命周期字段需要先应用 `0024_salty_nightshade.sql`，再部署对应 Worker。`state` 支持
+`linked/verified/uncertain/failed`；`objectCount/totalBytes` 是非负安全整数，未知时为 null。
+`verifiedAt` 接受带时区的 ISO 8601 时间或 Unix 毫秒整数，GET 统一返回 Unix 毫秒或 null。
+`manifestSha256` 是 64 位十六进制摘要或空字符串；PATCH 省略字段会保留原值。
+`verified` 表示归档校验状态；分享 URL 是否存在/可用是独立条件。通用存储接口允许仅有
+path 的私有归档；OpenClaw 的 MEGA 完整交付流程会另外要求 active 分享，不能仅凭 state 判断可下载。
+旧链接只标记为 `linked`，不自动补造验证证据。旧 CLI 2.5.0 按字符串原值核对时间，需同步应用
+[CLI 时间回读补丁](docs/patches/openclaw-storage-readback.patch)，否则 ISO 输入会与毫秒回读产生误报。
+
+Agent 画廊上传文件上限为 20 MiB。Vinext 对 multipart API 请求也先执行 progressive-action
+解析，所以 `next.config.ts` 设置 21 MiB 框架上限以容纳表单开销；接口自身仍拒绝超过 20 MiB 的文件。
+
+`GET /api/agent/anime/airing?source=animeschedule` 供 Nova/Hikari 读取 AnimeSchedule 日程。
+服务端优先使用网站集成设置中已加密的 Application Token，再使用 Worker 配置；客户端无需复制该 Token。
+支持 `tz`（默认 Asia/Tokyo）及同时提供的 `week/year`，不接受任意上游 URL，拒绝重定向。
+本轮历史画廊的受限恢复工具见 [运行说明](scripts/openclaw/README.md)。
+
 影视元数据通过 Cloudflare Worker 环境变量 `TMDB_API_KEY` 读取。生产环境可使用 `npx wrangler secret put TMDB_API_KEY --config wrangler.jsonc` 写入；本地 Wrangler 使用项目根目录的 `.dev.vars` 提供同名变量。密钥不会写入数据库或返回给浏览器。
 
 ## 推荐的自有云结构

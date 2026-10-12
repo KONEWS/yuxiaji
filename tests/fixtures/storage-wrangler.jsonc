@@ -1,0 +1,12 @@
+{
+  "name": "yuexiaji-storage-test",
+  "main": "storage-worker.mjs",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "YUEXIAJI_NOVA_TOKEN": "test-nova-token",
+    "YUEXIAJI_HIKARI_TOKEN": "test-hikari-token",
+    "DEFAULT_USER_ID": "storage-test-owner"
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "storage-test", "database_id": "00000000-0000-0000-0000-000000000001" }]
+}
