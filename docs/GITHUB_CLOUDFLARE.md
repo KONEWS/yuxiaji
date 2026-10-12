@@ -9,6 +9,7 @@ GitHub 仓库：<https://github.com/KONEWS/yuxiaji>。应用根目录就是仓�
 GitHub Actions 需要独立的 Cloudflare 部署 Token 和 Account ID；本地 Wrangler 的登录状态不会传到 GitHub。
 
 1. 在 Cloudflare 创建 API Token，限制到本项目所在账户。授予现有 Worker 的部署权限（Workers Editor；旧界面对应 Workers Scripts Edit），以及 D1 Edit，供迁移和表结构查询使用。仅绑定现有 R2 桶不需要额外的 R2 写权限；如以后需要修改域名或路由，再按实际需要增加对应 Zone 权限。参考 [Cloudflare GitHub Actions 说明](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)、[Workers 权限](https://developers.cloudflare.com/workers/authorization/workers/) 与 [Token 权限](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)。
+   如果将 Editor 限定到指定的 `tsuki-anime-rebuild` Worker，当前锁定的 Wrangler `4.92.0` 在发布收尾时还需要账户级 **Workers Content Read-Only**（旧权限 Workers Scripts Read），用于读取账户的 `workers.dev` 子域名。该权限只增加读取范围，Worker 编辑权限仍限制在指定 Worker。仅有 Individual Workers Editor 时，上传可能已上线，但 CLI 会在子域名查询时报 10000 并以失败结束；不要将失败简单理解成网站未更新。参考 [子域名接口所需权限](https://developers.cloudflare.com/api/resources/workers/subresources/subdomains/methods/get/)。
 2. 打开 GitHub 仓库的 **Settings → Secrets and variables → Actions**。新增 Secret `CLOUDFLARE_API_TOKEN`；新增 Variable `CLOUDFLARE_ACCOUNT_ID`，填写 `aefc1cf6e93860c276bae6bbc27888b6`（已核对包含现有 D1 和 Worker 的账户，与根配置相同）。工作流也接受同名 Account ID Secret。
 3. 工作流使用 GitHub Environment `production`。可将上述配置放在该 Environment，或沿用仓库级配置。若设置 Environment 保护规则，将允许部署的分支设为 `master`；要求人工审核时，GitHub 会在每次生产部署前等待审核。
 4. 在 **Actions → Check and deploy Cloudflare → Run workflow** 中选择 `master`，执行首次验证和部署。检查全部步骤的实际结果；密钥缺失会明确失败，方便识别未完成的配置。

@@ -211,3 +211,4 @@ npx wrangler deploy --config wrangler.jsonc
 - 新增 `npm run check`、远端迁移/表名检查脚本、`deploy:built` 与 `deploy`。后续部署统一使用这些入口，避免遗漏迁移。GitHub 自动部署时不再另外重复本地生产发布。
 - `.gitignore` 扩展忽略所有 `.dev.vars*`，仅允许无密钥的 `.dev.vars.example`；编译后 Worker 测试使用独立空环境文件和非持久本地运行时。
 - 本地 `npm run check`、`npm test`（32/32）及 Wrangler 部署 dry run 已通过。源码与现有四个历史提交检查未发现实际凭据、私人数据备份或运行产物；生产数据库、R2 图片与密钥继续留在 Cloudflare。
+- GitHub 的 Linux 检查也已通过。已按用户确认创建 `yuexiaji-github-actions` 专用 Token 并保存为 Actions Secret；编辑权限限 `tsuki-anime-rebuild`，D1 Write 与 Workers Content Read-Only 限本账户，无到期日。账户级只读权限用于 Wrangler `4.92.0` 在上传后读取 Workers 子域名；仅指定 Worker Editor 的首次发布已更新网站，但收尾查询因权限不足而失败。后续以对应 GitHub Actions 的最终结果和实际线上响应为准。
