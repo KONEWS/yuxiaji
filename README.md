@@ -37,13 +37,13 @@
 ### 网盘关联与 OpenClaw
 
 - 所有媒体类型都可关联多个网盘或归档位置（每条最多 12 个）。详情页未填写时将该区域保持折叠。链接可以保存 provider、分享 URL、远端路径和备注；OpenClaw 回填的归档记录还可带验证状态与清单摘要。
-- 网页通过 `/api/media/storage` 管理链接，OpenClaw 通过独立 Bearer Token 的 `/api/agent/storage` 管理。`/api/agent` 提供媒体、画廊、图片上传、视频、藏品、标签和 Bangumi 同步等接口，并按 Agent 身份检查权限。
+- 网页通过 `/api/media/storage` 管理链接，OpenClaw 及云开发环境通过独立 Bearer Token 的 `/api/agent/storage` 管理。`/api/agent` 提供媒体、画廊、图片上传、视频、藏品、标签和 Bangumi 同步等接口，并按 Agent 身份检查权限。
 - 网站不登录 MEGA，也不保存网盘密码、访问码、rclone 配置或原图。下载、原图归档、完整性校验与分享由外部 OpenClaw 下载 Skill 负责；月下集只接收经过权限校验的条目和归档关联元数据。相关自有云迁移边界见 [SELF_HOSTING.md](SELF_HOSTING.md)。
 
 ### 账户与安全
 
 - 首次初始化单一管理员后，使用密码登录；可启用 TOTP 双因素认证并使用恢复码。管理员可管理会话、设备、密码及登录安全设置。
-- 网页使用 HttpOnly Session Cookie，写操作检查 CSRF；`/api/agent/*` 只接受 Nova/Hikari Bearer Token，不会借用网页会话。Bangumi Access Token 在 Worker 内加密后存入 D1，不向浏览器返回明文。
+- 网页使用 HttpOnly Session Cookie，写操作检查 CSRF；`/api/agent/*` 只接受 Nova/Hikari/Codex Bearer Token，不会借用网页会话。Bangumi Access Token 在 Worker 内加密后存入 D1，不向浏览器返回明文。
 - `/api/health` 检测数据库和外部数据源连通性。所有媒体与存储链接查询均按当前用户隔离；大列表的画廊图片及存储链接按批读取，避免 D1 单条查询的参数上限。
 
 ## 运行环境
@@ -64,11 +64,14 @@ npm run dev
 - `TMDB_API_KEY`：电影、电视剧目录搜索与详情
 - `GOOGLE_BOOKS_API_KEY`：Google Books 可选 API key
 - `YUEXIAJI_NOVA_TOKEN`、`YUEXIAJI_HIKARI_TOKEN`：对应 Agent 的 Bearer Token
+- `YUEXIAJI_CODEX_TOKEN`：云开发环境的独立 Bearer Token；返回身份 `codex`，权限与 Hikari 相同，不允许删除、设备管理或标签管理。使用与现有 Token 不同的值，单独撤销或更换不会影响 Nova/Hikari。
 - `YUEXIAJI_CREDENTIALS_ENCRYPTION_KEY`：集成凭据加密密钥；兼容旧名称 `BANGUMI_TOKEN_ENCRYPTION_KEY`
 - `ANIMESCHEDULE_TOKEN`：AnimeSchedule 可选令牌；也可在账户集成设置中绑定
 - `DEFAULT_USER_ID`：单用户数据归属标识
 
 首次安装需先应用 D1 迁移并完成管理员初始化。不要把 `.dev.vars`、网盘凭据或 Token 提交到 Git。缺少外部服务的可选密钥时，对应来源可能不可用，但不应把它当作媒体数据丢失。
+
+线上启用 Codex 需先部署支持该身份的代码，再在现有 Worker 的 Secrets 中设置 `YUEXIAJI_CODEX_TOKEN`，并通过云环境的安全密钥设置配置同一个值，限定目标网站域名。仅在云环境填写 Token 不会注册线上凭据。接入后先请求 `GET /api/agent` 核对 `agent: "codex"` 与权限；现有 API 的 `source: "openclaw"` 字段保持兼容，身份和审计通过 `agent` 区分。
 
 ## 数据与认证边界
 

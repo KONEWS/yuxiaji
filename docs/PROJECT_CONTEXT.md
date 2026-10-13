@@ -93,12 +93,13 @@ Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0024`。
 
 认证实现：`app/lib/agent-auth.ts`。标准头 `Authorization: Bearer <token>`；当前还兼容 `X-Agent-Token`。Worker 对 `/api/agent` 与 `/api/agent/*` 绕过浏览器 Session 分支，再由各 Agent 路由检查 Token。
 
-Token 变量：`YUEXIAJI_NOVA_TOKEN`、`YUEXIAJI_HIKARI_TOKEN`，实际读取 Worker 运行时 env。缺少/错误 Token 返回 401；权限不足返回 403。
+Token 变量：`YUEXIAJI_NOVA_TOKEN`、`YUEXIAJI_HIKARI_TOKEN`、`YUEXIAJI_CODEX_TOKEN`，实际读取 Worker 运行时 env。缺少/错误 Token 返回 401；权限不足返回 403。
 
 - Nova：媒体/画廊/视频/存储的读、创建、更新、删除；设备完整权限；标签管理；Bangumi 同步。
 - Hikari：媒体/画廊/视频/存储的读、创建、更新；标签只读；Bangumi 同步。没有删除权限、设备权限或标签管理权限。
+- Codex：云开发环境专用身份，权限与 Hikari 相同。Token 独立配置，必须使用不同于 Nova/Hikari 的值；身份返回 `agent: "codex"`，现有 `source: "openclaw"` 契约保持兼容。线上启用需要部署认证支持并单独配置 Worker Secret，代码修改本身不证明生产 Token 已生效。
 - 首先调用 `GET /api/agent`，查看返回的 `agent`、`user`、`permissions`、`endpoints`。该入口只做认证和返回能力，没有数据库写入，也不能证明 D1/R2 完全正常。
-- 两个 Token 若配置为相同值，代码按 Nova 优先匹配；身份应由 `/api/agent` 返回值核对。
+- 三个 Token 应使用独立的值；重复值按 Nova、Hikari、Codex 的顺序匹配，身份应由 `/api/agent` 返回值核对。
 
 ### 接口与响应
 
@@ -112,7 +113,7 @@ Token 变量：`YUEXIAJI_NOVA_TOKEN`、`YUEXIAJI_HIKARI_TOKEN`，实际读取 Wo
 | `/api/agent/tags` | 标签读取和管理；Hikari 只读 |
 | `/api/agent/storage` | 按 `mediaId` 读写媒体的存储地址 |
 | `/api/agent/sync` | POST Bangumi 同步，包装已有同步路由并加幂等审计 |
-| `/api/agent/anime/airing` | Nova/Hikari 的 `airing:read` 权限；复用网站加密 AnimeSchedule 凭据；只返回日程字段 |
+| `/api/agent/anime/airing` | Nova/Hikari/Codex 的 `airing:read` 权限；复用网站加密 AnimeSchedule 凭据；只返回日程字段 |
 
 `id`、`mediaId`、`galleryId` 对应月下集数据库内部主键；不能将 Bangumi ID、Pixiv PID、VNDB ID 或上传返回的 `assetId` 当作媒体 ID。`/api/agent/gallery/upload` 的 `assetId` 来自操作记录 ID，已有画廊附图时另有 `galleryImage.id`。
 

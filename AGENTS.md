@@ -13,7 +13,7 @@
 
 - 当前使用 Vinext + Vite + React 的 App Router，运行在 Cloudflare Workers，数据存储是 D1 + Drizzle，展示图片在 R2，Agent 图片转换依赖 Images。
 - 网站是单管理员应用。浏览器 Session/CSRF 与 Agent Token 认证分离；保留 `worker/index.ts` 对 Agent 路径的隔离。
-- Agent 为 Nova/Hikari，权限见 `app/lib/agent-auth.ts`。写操作的幂等与审计见 `app/lib/agent-operations.ts`。
+- Agent 为 Nova/Hikari/Codex，权限见 `app/lib/agent-auth.ts`。Codex 使用独立 `YUEXIAJI_CODEX_TOKEN`，权限与 Hikari 相同，不替换现有 Token。写操作的幂等与审计见 `app/lib/agent-operations.ts`。
 - 当前用户数据归属由 `DEFAULT_USER_ID` 决定，缺省 `owner`；不是请求参数或 Agent 名称。涉及归属问题先核对这一实现。
 - `/api/state` 保存偏好；媒体主数据在 `user_subjects`，不要重新从 `anime_json` 或浏览器缓存覆盖媒体表。
 - 网盘原图归档由外部 OpenClaw 完成；网站存展示图与存储关联。不要将网盘凭据、rclone 配置、Agent Token 或 `.dev.vars` 内容写入代码、文档或日志。

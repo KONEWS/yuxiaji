@@ -27,15 +27,31 @@ before(async () => {
 });
 after(async () => { await worker?.stop(); });
 
-test("airing authenticates both Agents and advertises the read capability", async () => {
+test("airing authenticates all Agents and advertises the read capability", async () => {
   await setup("/__test/upstream", { status: 200, body: [] });
   assert.equal((await api(undefined, "")).status, 401);
   assert.equal((await api(undefined, "invalid-token")).status, 401);
   assert.equal(await (await worker.fetch("/__test/observed")).json(), null);
-  for (const token of ["test-nova-token", "test-hikari-token"]) {
+  for (const [token, agent] of [["test-nova-token", "nova"], ["test-hikari-token", "hikari"], ["test-codex-token", "codex"]]) {
     const result = await api("/api/agent", token);
+    assert.equal(result.status, 200);
+    assert.equal(result.body.agent, agent);
+    assert.equal(result.body.user, "airing-test-owner");
     assert.ok(result.body.permissions.includes("airing:read"));
     assert.equal(result.body.endpoints.animeAiring, "/api/agent/anime/airing");
+  }
+});
+
+test("Codex has its own identity and editing permissions without administrative or delete access", async () => {
+  const codex = await api("/api/agent", "test-codex-token");
+  const hikari = await api("/api/agent", "test-hikari-token");
+  assert.equal(codex.body.source, "openclaw");
+  assert.deepEqual(codex.body.permissions, hikari.body.permissions);
+  for (const permission of ["media:create", "media:update", "gallery:create", "gallery:update", "video:create", "video:update", "storage:create", "storage:update"]) {
+    assert.ok(codex.body.permissions.includes(permission), permission);
+  }
+  for (const permission of ["media:delete", "gallery:delete", "video:delete", "storage:delete", "devices:read", "devices:create", "devices:update", "devices:delete", "tags:manage"]) {
+    assert.ok(!codex.body.permissions.includes(permission), permission);
   }
 });
 
@@ -43,7 +59,7 @@ test("airing decrypts the stored credential only in the Worker and returns sched
   await setup("/__test/credential", { enabled: true });
   const row = { id: "schedule-1", route: "anime-1", title: "Anime 1", episodeDate: "2026-10-02T15:00:00Z", episodeNumber: 3, token: "isolated-animeschedule-token", tokenCiphertext: "private-ciphertext", headers: { authorization: "private" } };
   await setup("/__test/upstream", { status: 200, body: [row] });
-  for (const token of ["test-nova-token", "test-hikari-token"]) {
+  for (const token of ["test-nova-token", "test-hikari-token", "test-codex-token"]) {
     const result = await api("/api/agent/anime/airing?source=animeschedule&tz=Asia%2FHong_Kong&week=40&year=2026", token);
     assert.equal(result.status, 200);
     assert.equal(result.cacheControl, "no-store");

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { getCurrentUser } from "./current-user";
 
-export type AgentName = "nova" | "hikari";
+export type AgentName = "nova" | "hikari" | "codex";
 export type AgentPermission =
   | "media:read"
   | "media:create"
@@ -45,11 +45,18 @@ const PERMISSIONS: Record<AgentName, readonly AgentPermission[]> = {
     "video:read", "video:create", "video:update",
     "storage:read", "storage:create", "storage:update",
   ],
+  codex: [
+    "media:read", "media:create", "media:update", "tags:read", "bangumi:sync", "airing:read",
+    "gallery:read", "gallery:create", "gallery:update",
+    "video:read", "video:create", "video:update",
+    "storage:read", "storage:create", "storage:update",
+  ],
 };
 
 type AgentRuntimeEnv = typeof env & {
   YUEXIAJI_NOVA_TOKEN?: string;
   YUEXIAJI_HIKARI_TOKEN?: string;
+  YUEXIAJI_CODEX_TOKEN?: string;
 };
 
 function configuredTokens() {
@@ -57,6 +64,7 @@ function configuredTokens() {
   return [
     ["nova", runtimeEnv.YUEXIAJI_NOVA_TOKEN],
     ["hikari", runtimeEnv.YUEXIAJI_HIKARI_TOKEN],
+    ["codex", runtimeEnv.YUEXIAJI_CODEX_TOKEN],
   ] as const;
 }
 

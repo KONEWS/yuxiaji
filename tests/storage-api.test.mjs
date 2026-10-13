@@ -89,6 +89,26 @@ test("Agent storage POST, GET, media/gallery reads, PATCH and replay preserve li
   assert.equal(cleared.body.storageLink.verifiedAt, null);
 });
 
+test("Codex writes are replayable and isolated from Nova operations with the same key", async () => {
+  const key = "codex-independent-create";
+  const novaBody = { mediaId: 3, provider: "test", path: "/nova" };
+  const codexBody = { mediaId: 3, provider: "test", path: "/codex" };
+  const nova = await api("/api/agent/storage", "POST", novaBody, "test-nova-token", key);
+  const codex = await api("/api/agent/storage", "POST", codexBody, "test-codex-token", key);
+  assert.equal(nova.status, 201);
+  assert.equal(codex.status, 201);
+  assert.equal(codex.body.agent, "codex");
+  assert.notEqual(nova.body.storageLink.id, codex.body.storageLink.id);
+  assert.equal(codex.body.storageLink.path, "/codex");
+  const replay = await api("/api/agent/storage", "POST", codexBody, "test-codex-token", key);
+  assert.equal(replay.replay, "true");
+  assert.equal(replay.body.storageLink.id, codex.body.storageLink.id);
+  const denied = await api(`/api/agent/storage?mediaId=3&id=${codex.body.storageLink.id}`, "DELETE", undefined, "test-codex-token", "codex-delete-denied");
+  assert.equal(denied.status, 403);
+  const read = await api("/api/agent/storage?mediaId=3", "GET", undefined, "test-codex-token");
+  assert.ok(read.body.storageLinks.some((link) => link.id === codex.body.storageLink.id));
+});
+
 test("gallery lists beyond 100 entries include images and storage without D1 bind errors", async () => {
   const result = await api("/api/agent/gallery");
   assert.equal(result.status, 200, JSON.stringify(result.body));

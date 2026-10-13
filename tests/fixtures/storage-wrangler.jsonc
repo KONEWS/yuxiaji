@@ -6,6 +6,7 @@
   "vars": {
     "YUEXIAJI_NOVA_TOKEN": "test-nova-token",
     "YUEXIAJI_HIKARI_TOKEN": "test-hikari-token",
+    "YUEXIAJI_CODEX_TOKEN": "test-codex-token",
     "DEFAULT_USER_ID": "storage-test-owner"
   },
   "d1_databases": [{ "binding": "DB", "database_name": "storage-test", "database_id": "00000000-0000-0000-0000-000000000001" }]

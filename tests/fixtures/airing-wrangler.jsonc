@@ -6,6 +6,7 @@
   "vars": {
     "YUEXIAJI_NOVA_TOKEN": "test-nova-token",
     "YUEXIAJI_HIKARI_TOKEN": "test-hikari-token",
+    "YUEXIAJI_CODEX_TOKEN": "test-codex-token",
     "DEFAULT_USER_ID": "airing-test-owner",
     "YUEXIAJI_CREDENTIALS_ENCRYPTION_KEY": "isolated-airing-test-encryption-key"
   },
