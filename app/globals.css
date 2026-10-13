@@ -265,6 +265,36 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .anime-list-actions .record { height: 28px; padding: 0 8px; border: 1px solid #4fbae6; border-radius: 7px; background: var(--primary); color: #163a49; font-size: 9px; font-weight: 700; }
 .anime-list-actions .text-button { height: 28px; border: 0; background: transparent; color: var(--muted); padding: 0 2px; font-size: 9px; }
 
+.anime-grid.music-track-list { --music-list-columns: minmax(0, 1.5fr) minmax(0, 1fr) 44px 48px 44px; grid-template-columns: minmax(0, 1fr); gap: 0; }
+.music-list-header, .music-list-row { display: grid; grid-template-columns: var(--music-list-columns); align-items: center; gap: 16px; padding-inline: 12px; }
+.music-list-header { padding-bottom: 9px; color: var(--soft); font-size: 10px; }
+.music-list-header > span { min-width: 0; }
+.music-list-header > span:nth-child(3), .music-list-header > span:last-child { text-align: center; }
+.music-list-header > span:nth-child(4) { text-align: right; }
+.music-list-row { min-width: 0; min-height: 78px; padding-block: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--paper) 78%, transparent); }
+.music-list-row:first-child, .music-list-header + .music-list-row { border-top: 1px solid var(--line); border-radius: 10px 10px 0 0; }
+.music-list-row:last-child { border-radius: 0 0 10px 10px; }
+.music-list-row:only-child { border-radius: 10px; }
+.music-list-row:hover, .music-list-row:focus-within { background: color-mix(in srgb, var(--primary) 7%, var(--paper)); }
+.music-list-row.batch-selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--paper)); box-shadow: inset 3px 0 0 var(--accent); }
+.music-list-song { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.music-list-song .batch-checkbox { width: 20px; min-height: 36px; }
+.music-list-cover { width: 52px; height: 52px; min-width: 52px; flex: 0 0 52px; position: relative; border: 1px solid var(--line); border-radius: 8px; background: var(--tint); padding: 0; overflow: hidden; }
+.music-list-cover-image { width: 100%; height: 100%; display: block; object-fit: cover; }
+.music-list-cover-image.poster-placeholder { display: grid; font-size: 20px; }
+.music-list-info { min-width: 0; flex: 1; display: grid; gap: 5px; }
+.music-list-title { min-width: 0; width: 100%; display: block; border: 0; border-radius: 3px; background: transparent; padding: 0; overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 650; line-height: 1.4; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.music-list-title:hover { color: var(--accent); }
+.music-list-artist { min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.music-list-artist > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-list-artist > em { flex: 0 0 auto; border-radius: 4px; background: color-mix(in srgb, var(--accent) 10%, var(--paper)); color: var(--accent); padding: 2px 5px; font-size: 9px; font-style: normal; }
+.music-list-album { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.music-list-mobile-album { display: none; }
+.music-list-score { min-width: 0; color: var(--accent); font-size: 14px; font-weight: 700; text-align: center; }
+.music-list-duration { min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.music-list-detail { width: 44px; min-height: 36px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); padding: 0; font-size: 11px; }
+.music-list-detail:hover { background: var(--tint); color: var(--accent); }
+
 .schedule-panel { border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.9); overflow: hidden; }
 .schedule-title { min-height: 78px; padding: 18px 18px 14px; display: flex; align-items: center; justify-content: space-between; }
 .schedule-title p { margin: 0 0 4px; color: var(--accent); font-size: 10px; font-weight: 700; }
@@ -662,6 +692,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .anime-list-row { min-height: 72px; grid-template-columns: 64px minmax(0,1fr) 50px; gap: 8px; padding: 9px 7px; }
   .anime-list-header { grid-template-columns: 64px minmax(0,1fr) 50px; gap: 8px; padding-inline: 7px; }.anime-list-header span:nth-child(4), .anime-list-header span:nth-child(5) { display: none; }
   .anime-list-score { justify-items: end; }.anime-list-score b { font-size: 14px; }.anime-list-progress { display: none; }.anime-list-actions { grid-column: 2/-1; justify-content: flex-start; margin-top: -2px; }.anime-list-actions .record { padding-inline: 7px; }
+  .anime-grid.music-track-list { --music-list-columns: minmax(0, 1fr) 40px 36px; }
+  .music-list-header, .music-list-row { gap: 8px; padding-inline: 7px; }
+  .music-list-header > span:nth-child(2), .music-list-header > span:nth-child(3), .music-list-album, .music-list-score { display: none; }
+  .music-list-row { min-height: 74px; padding-block: 10px; }
+  .music-list-song { gap: 8px; }
+  .music-list-song .batch-checkbox { width: 18px; }
+  .music-list-cover { width: 44px; height: 44px; min-width: 44px; flex-basis: 44px; border-radius: 6px; }
+  .music-list-info { gap: 3px; }
+  .music-list-title { font-size: 12px; }
+  .music-list-artist { gap: 5px; font-size: 10px; }
+  .music-list-artist > em { padding: 1px 3px; font-size: 8px; }
+  .music-list-mobile-album { min-width: 0; display: block; overflow: hidden; color: var(--soft); font-size: 9px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+  .music-list-duration { font-size: 11px; }
+  .music-list-detail { width: 36px; min-height: 36px; font-size: 10px; }
   .device-list-row { min-height: 72px; grid-template-columns: 62px minmax(0,1fr) 54px; gap: 8px; padding: 9px 7px; }.device-list-price { display: none; }.device-list-rating { justify-items: end; }.device-list-rating b { font-size: 13px; }.device-list-actions { grid-column: 2/-1; justify-content: flex-start; margin-top: -2px; }
   .device-list-header { grid-template-columns: 62px minmax(0,1fr) 54px; gap: 8px; padding-inline: 7px; }.device-list-header span:nth-child(3), .device-list-header span:nth-child(5) { display: none; }
   .toast { bottom: 76px; max-width: calc(100% - 28px); white-space: nowrap; }

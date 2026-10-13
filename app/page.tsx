@@ -300,6 +300,7 @@ export default function Home() {
   const [deviceForm, setDeviceForm] = useState<DeviceForm | null>(null);
   const [receiptPreview, setReceiptPreview] = useState<Device | null>(null);
   const [acgLayout, setAcgLayout] = useState<LayoutMode>("grid");
+  const [musicLayout, setMusicLayout] = useState<LayoutMode>("list");
   const [deviceLayout, setDeviceLayout] = useState<LayoutMode>("grid");
   const mediaDragIndex = useRef<number | null>(null);
   const persistedMediaIds = useRef<Set<number>>(new Set());
@@ -333,8 +334,10 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       try {
         const savedAcgLayout = window.localStorage.getItem("yuexiaji:acg-layout");
+        const savedMusicLayout = window.localStorage.getItem("yuexiaji:music-layout");
         const savedDeviceLayout = window.localStorage.getItem("yuexiaji:device-layout");
         if (savedAcgLayout === "grid" || savedAcgLayout === "list") setAcgLayout(savedAcgLayout);
+        if (savedMusicLayout === "grid" || savedMusicLayout === "list") setMusicLayout(savedMusicLayout);
         if (savedDeviceLayout === "grid" || savedDeviceLayout === "list") setDeviceLayout(savedDeviceLayout);
       } catch {
         // Local storage can be unavailable in privacy-restricted browsers.
@@ -349,6 +352,11 @@ export default function Home() {
     if (!layoutPreferencesLoaded.current) return;
     try { window.localStorage.setItem("yuexiaji:acg-layout", acgLayout); } catch { /* ignore storage errors */ }
   }, [acgLayout]);
+
+  useEffect(() => {
+    if (!layoutPreferencesLoaded.current) return;
+    try { window.localStorage.setItem("yuexiaji:music-layout", musicLayout); } catch { /* ignore storage errors */ }
+  }, [musicLayout]);
 
   useEffect(() => {
     if (!layoutPreferencesLoaded.current) return;
@@ -1049,7 +1057,7 @@ export default function Home() {
         anime={anime} visibleAnime={visibleAnime} collections={collections} activeStatus={activeStatus} setActiveStatus={setActiveStatus} statusCounts={statusCounts}
         activeMedia={activeMedia} setActiveMedia={setActiveMedia} includeStandaloneMedia={includeStandaloneMedia} setIncludeStandaloneMedia={setIncludeStandaloneMedia} mediaOrder={mediaOrder} mediaDragIndex={mediaDragIndex} moveMediaTab={moveMediaTab}
         activeCollection={activeCollection} setActiveCollection={setActiveCollection} selectCollection={selectCollection} openCollectionManager={() => setModal("collection_manager")}
-        openAdd={() => setModal("add")} openCollection={() => setModal("collection")} openVisualSubtypeManager={openVisualSubtypeManager} acgLayout={acgLayout} setAcgLayout={setAcgLayout}
+        openAdd={() => setModal("add")} openCollection={() => setModal("collection")} openVisualSubtypeManager={openVisualSubtypeManager} acgLayout={acgLayout} setAcgLayout={setAcgLayout} musicLayout={musicLayout} setMusicLayout={setMusicLayout}
         ratingScope={ratingScope} setRatingScope={setRatingScope} scoreFloor={scoreFloor} setScoreFloor={setScoreFloor} activeTags={activeTags} setActiveTags={setActiveTags} tagPreferences={tagPreferences} setTagPreferences={setTagPreferences} hideDropped={hideDropped} setHideDropped={setHideDropped} sortMode={sortMode} setSortMode={setSortMode}
         musicFacets={musicFacets} musicAlbum={musicAlbum} setMusicAlbum={setMusicAlbum} musicArtist={musicArtist} setMusicArtist={setMusicArtist} musicLyricist={musicLyricist} setMusicLyricist={setMusicLyricist} animeSongsOnly={animeSongsOnly} setAnimeSongsOnly={setAnimeSongsOnly} visualSubtype={visualSubtype} setVisualSubtype={setVisualSubtype} visualSubtypeLabels={visualSubtypeLabels} videoSubtype={videoSubtype} setVideoSubtype={setVideoSubtype} videoSubtypeLabels={videoSubtypeLabels} openVideoSubtypeManager={openVideoSubtypeManager}
         onAdjust={adjust} onDetails={openDetails} onRate={rateAnime} onBatchDelete={deleteSelectedAnime} titleMode={titleMode} openCalendar={openCalendar} toggleCalendarTracking={toggleCalendarTracking} airingSchedules={airingSchedules} airingBySubjectId={airingBySubjectId}
