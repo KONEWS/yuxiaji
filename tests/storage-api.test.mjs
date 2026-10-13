@@ -103,10 +103,58 @@ test("Codex writes are replayable and isolated from Nova operations with the sam
   const replay = await api("/api/agent/storage", "POST", codexBody, "test-codex-token", key);
   assert.equal(replay.replay, "true");
   assert.equal(replay.body.storageLink.id, codex.body.storageLink.id);
-  const denied = await api(`/api/agent/storage?mediaId=3&id=${codex.body.storageLink.id}`, "DELETE", undefined, "test-codex-token", "codex-delete-denied");
-  assert.equal(denied.status, 403);
+  const path = `/api/agent/storage?mediaId=3&id=${codex.body.storageLink.id}`;
+  const deleted = await api(path, "DELETE", undefined, "test-codex-token", "codex-delete");
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.agent, "codex");
+  assert.equal(deleted.body.deleted.id, codex.body.storageLink.id);
+  const deleteReplay = await api(path, "DELETE", undefined, "test-codex-token", "codex-delete");
+  assert.equal(deleteReplay.replay, "true");
+  assert.deepEqual(deleteReplay.body, deleted.body);
   const read = await api("/api/agent/storage?mediaId=3", "GET", undefined, "test-codex-token");
-  assert.ok(read.body.storageLinks.some((link) => link.id === codex.body.storageLink.id));
+  assert.ok(!read.body.storageLinks.some((link) => link.id === codex.body.storageLink.id));
+  assert.ok(read.body.storageLinks.some((link) => link.id === nova.body.storageLink.id));
+});
+
+test("Codex manages owned devices and tags without granting Hikari access", async () => {
+  await sql(["INSERT INTO user_devices (id,user_key,name,category,updated_at) VALUES (901,'other-owner','private','audio',1)"]);
+  const codex = "test-codex-token";
+  const hikari = "test-hikari-token";
+  const created = await api("/api/agent/devices", "POST", { name: "Codex test device" }, codex, "codex-device-create");
+  assert.equal(created.status, 201);
+  assert.equal(created.body.agent, "codex");
+  const id = created.body.device.id;
+  const read = await api(`/api/agent/devices?id=${id}`, "GET", undefined, codex);
+  assert.equal(read.status, 200);
+  assert.equal(read.body.device.name, "Codex test device");
+  const updated = await api("/api/agent/devices", "PATCH", { id, name: "Edited device" }, codex, "codex-device-update");
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.device.name, "Edited device");
+  for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
+    const denied = await api(`/api/agent/devices?id=${id}`, method, method === "POST" || method === "PATCH" ? { id, name: "Denied" } : undefined, hikari, `hikari-device-${method}`);
+    assert.equal(denied.status, 403, method);
+  }
+  assert.equal((await api("/api/agent/devices?id=901", "GET", undefined, codex)).body.device, null);
+  assert.equal((await api("/api/agent/devices?id=901", "DELETE", undefined, codex, "codex-unowned-device")).status, 404);
+  const deleted = await api(`/api/agent/devices?id=${id}`, "DELETE", undefined, codex, "codex-device-delete");
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.deleted.id, id);
+  assert.deepEqual((await api("/api/agent/devices", "GET", undefined, codex)).body.devices, []);
+
+  const tagged = await api("/api/agent/tags", "POST", { id: 4, tags: ["codex-management"] }, codex, "codex-tags-replace");
+  assert.equal(tagged.status, 200);
+  assert.equal(tagged.body.agent, "codex");
+  assert.deepEqual(tagged.body.tags, ["codex-management"]);
+  const tagList = await api("/api/agent/tags", "GET", undefined, hikari);
+  assert.equal(tagList.status, 200);
+  assert.ok(tagList.body.tags.some(({ tag }) => tag === "codex-management"));
+  assert.equal((await api("/api/agent/tags", "POST", { id: 4, tags: [] }, hikari, "hikari-tags-replace")).status, 403);
+  assert.equal((await api("/api/agent/tags?tag=codex-management", "DELETE", undefined, hikari, "hikari-tags-remove")).status, 403);
+  assert.equal((await api("/api/agent/tags", "POST", { id: 901, tags: ["denied"] }, codex, "codex-unowned-tags")).status, 404);
+  const removed = await api("/api/agent/tags?tag=codex-management", "DELETE", undefined, codex, "codex-tags-remove");
+  assert.equal(removed.status, 200);
+  assert.equal(removed.body.changed, 1);
+  assert.deepEqual((await api("/api/agent/media?id=4", "GET", undefined, codex)).body.subject.tags, []);
 });
 
 test("gallery lists beyond 100 entries include images and storage without D1 bind errors", async () => {

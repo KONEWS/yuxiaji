@@ -30,27 +30,24 @@ export type AgentPermission =
 
 export type AgentIdentity = { agent: AgentName; userKey: string; source: "openclaw" };
 
+const FULL_PERMISSIONS: readonly AgentPermission[] = [
+  "media:read", "media:create", "media:update", "media:delete",
+  "devices:read", "devices:create", "devices:update", "devices:delete",
+  "tags:read", "tags:manage", "bangumi:sync", "airing:read",
+  "gallery:read", "gallery:create", "gallery:update", "gallery:delete",
+  "video:read", "video:create", "video:update", "video:delete",
+  "storage:read", "storage:create", "storage:update", "storage:delete",
+];
+
 const PERMISSIONS: Record<AgentName, readonly AgentPermission[]> = {
-  nova: [
-    "media:read", "media:create", "media:update", "media:delete",
-    "devices:read", "devices:create", "devices:update", "devices:delete",
-    "tags:read", "tags:manage", "bangumi:sync", "airing:read",
-    "gallery:read", "gallery:create", "gallery:update", "gallery:delete",
-    "video:read", "video:create", "video:update", "video:delete",
-    "storage:read", "storage:create", "storage:update", "storage:delete",
-  ],
+  nova: FULL_PERMISSIONS,
   hikari: [
     "media:read", "media:create", "media:update", "tags:read", "bangumi:sync", "airing:read",
     "gallery:read", "gallery:create", "gallery:update",
     "video:read", "video:create", "video:update",
     "storage:read", "storage:create", "storage:update",
   ],
-  codex: [
-    "media:read", "media:create", "media:update", "tags:read", "bangumi:sync", "airing:read",
-    "gallery:read", "gallery:create", "gallery:update",
-    "video:read", "video:create", "video:update",
-    "storage:read", "storage:create", "storage:update",
-  ],
+  codex: FULL_PERMISSIONS,
 };
 
 type AgentRuntimeEnv = typeof env & {

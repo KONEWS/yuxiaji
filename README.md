@@ -64,7 +64,7 @@ npm run dev
 - `TMDB_API_KEY`：电影、电视剧目录搜索与详情
 - `GOOGLE_BOOKS_API_KEY`：Google Books 可选 API key
 - `YUEXIAJI_NOVA_TOKEN`、`YUEXIAJI_HIKARI_TOKEN`：对应 Agent 的 Bearer Token
-- `YUEXIAJI_CODEX_TOKEN`：云开发环境的独立 Bearer Token；返回身份 `codex`，权限与 Hikari 相同，不允许删除、设备管理或标签管理。使用与现有 Token 不同的值，单独撤销或更换不会影响 Nova/Hikari。
+- `YUEXIAJI_CODEX_TOKEN`：云开发环境的独立 Bearer Token；返回身份 `codex`，权限与 Nova 相同，包括媒体/画廊/视频/存储的删除、设备管理和标签管理。使用与现有 Token 不同的值，单独撤销或更换不会影响 Nova/Hikari；Hikari 权限保持原样。
 - `YUEXIAJI_CREDENTIALS_ENCRYPTION_KEY`：集成凭据加密密钥；兼容旧名称 `BANGUMI_TOKEN_ENCRYPTION_KEY`
 - `ANIMESCHEDULE_TOKEN`：AnimeSchedule 可选令牌；也可在账户集成设置中绑定
 - `DEFAULT_USER_ID`：单用户数据归属标识

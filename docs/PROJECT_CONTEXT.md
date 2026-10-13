@@ -69,7 +69,7 @@ Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0024`。
 
 `media_storage_links` 已增加 `state/operationKey/objectCount/totalBytes/manifestSha256/verifiedAt`（迁移 `0024_salty_nightshade.sql`）；本轮已应用生产 D1 迁移并部署对应 Worker。SQL `0023_classy_jetstream.sql` 包含每条媒体最多 12 个链接的触发器与主存储唯一索引。更改 schema 时不能忽略这些数据库层约束。
 
-`getCurrentUser()` 当前忽略 Request，只返回 Worker 的 `DEFAULT_USER_ID` 或默认 `owner`。浏览器和两个 Agent 都通过此规则使用同一单用户数据域；管理员用户名、Nova/Hikari 名字和媒体外部 ID 都不是 user key。
+`getCurrentUser()` 当前忽略 Request，只返回 Worker 的 `DEFAULT_USER_ID` 或默认 `owner`。浏览器和三个 Agent 都通过此规则使用同一单用户数据域；管理员用户名、Nova/Hikari/Codex 名字和媒体外部 ID 都不是 user key。
 
 ## 5. 浏览器 API 与外部来源
 
@@ -97,7 +97,7 @@ Token 变量：`YUEXIAJI_NOVA_TOKEN`、`YUEXIAJI_HIKARI_TOKEN`、`YUEXIAJI_CODEX
 
 - Nova：媒体/画廊/视频/存储的读、创建、更新、删除；设备完整权限；标签管理；Bangumi 同步。
 - Hikari：媒体/画廊/视频/存储的读、创建、更新；标签只读；Bangumi 同步。没有删除权限、设备权限或标签管理权限。
-- Codex：云开发环境专用身份，权限与 Hikari 相同。Token 独立配置，必须使用不同于 Nova/Hikari 的值；身份返回 `agent: "codex"`，现有 `source: "openclaw"` 契约保持兼容。线上启用需要部署认证支持并单独配置 Worker Secret，代码修改本身不证明生产 Token 已生效。
+- Codex：云开发环境专用身份，权限与 Nova 相同，包括删除、设备管理和标签管理；Hikari 权限保持原样。Token 独立配置，必须使用不同于 Nova/Hikari 的值；身份返回 `agent: "codex"`，现有 `source: "openclaw"` 契约保持兼容。线上启用需要部署认证支持并单独配置 Worker Secret，代码修改本身不证明生产 Token 已生效。
 - 首先调用 `GET /api/agent`，查看返回的 `agent`、`user`、`permissions`、`endpoints`。该入口只做认证和返回能力，没有数据库写入，也不能证明 D1/R2 完全正常。
 - 三个 Token 应使用独立的值；重复值按 Nova、Hikari、Codex 的顺序匹配，身份应由 `/api/agent` 返回值核对。
 

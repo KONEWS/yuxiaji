@@ -42,16 +42,22 @@ test("airing authenticates all Agents and advertises the read capability", async
   }
 });
 
-test("Codex has its own identity and editing permissions without administrative or delete access", async () => {
+test("Codex retains its own identity with Nova permissions while Hikari remains restricted", async () => {
   const codex = await api("/api/agent", "test-codex-token");
+  const nova = await api("/api/agent", "test-nova-token");
   const hikari = await api("/api/agent", "test-hikari-token");
+  assert.equal(codex.status, 200);
+  assert.equal(codex.body.agent, "codex");
   assert.equal(codex.body.source, "openclaw");
-  assert.deepEqual(codex.body.permissions, hikari.body.permissions);
+  assert.deepEqual(codex.body.permissions, nova.body.permissions);
+  assert.equal(codex.body.permissions.length, 24);
+  assert.equal(hikari.body.permissions.length, 15);
   for (const permission of ["media:create", "media:update", "gallery:create", "gallery:update", "video:create", "video:update", "storage:create", "storage:update"]) {
     assert.ok(codex.body.permissions.includes(permission), permission);
   }
   for (const permission of ["media:delete", "gallery:delete", "video:delete", "storage:delete", "devices:read", "devices:create", "devices:update", "devices:delete", "tags:manage"]) {
-    assert.ok(!codex.body.permissions.includes(permission), permission);
+    assert.ok(codex.body.permissions.includes(permission), permission);
+    assert.ok(!hikari.body.permissions.includes(permission), permission);
   }
 });
 
