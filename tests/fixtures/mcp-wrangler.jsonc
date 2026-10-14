@@ -1,0 +1,13 @@
+{
+  "name": "yuexiaji-mcp-test",
+  "main": "mcp-worker.mjs",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "YUEXIAJI_NOVA_TOKEN": "test-nova-token",
+    "YUEXIAJI_HIKARI_TOKEN": "test-hikari-token",
+    "YUEXIAJI_CODEX_TOKEN": "test-codex-token",
+    "DEFAULT_USER_ID": "mcp-test-owner"
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "mcp-test", "database_id": "00000000-0000-0000-0000-000000000003" }]
+}

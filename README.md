@@ -46,6 +46,12 @@
 - 网页使用 HttpOnly Session Cookie，写操作检查 CSRF；`/api/agent/*` 只接受 Nova/Hikari/Codex Bearer Token，不会借用网页会话。Bangumi Access Token 在 Worker 内加密后存入 D1，不向浏览器返回明文。
 - `/api/health` 检测数据库和外部数据源连通性。所有媒体与存储链接查询均按当前用户隔离；大列表的画廊图片及存储链接按批读取，避免 D1 单条查询的参数上限。
 
+### 普通 ChatGPT 内容插件
+
+- `/mcp` 提供独立 OAuth 授权的内容插件，可在普通 ChatGPT 新会话读取、添加及编辑收藏、评分、标签、藏品和存储链接；不提供源码、部署、账号、删除或批量同步工具。
+- 使用月下集管理员账户完成一次登录授权，不把现有 Agent Token 交给 ChatGPT。授权可在 `/connect/chatgpt/manage` 撤销，写入以 `chatgpt` 身份单独审计。
+- ChatGPT 需手动创建并安装自定义 MCP 插件。服务器地址、权限说明及使用示例见 [内容插件安装说明](docs/CHATGPT_CONTENT_PLUGIN.md)。
+
 ## 运行环境
 
 - Node.js `>=22.13.0`
@@ -103,7 +109,7 @@ npm test
 npm run deploy:built
 ```
 
-`npm test` 会先构建，再运行存储链接/画廊分批查询、存储 API、Agent 放送代理与本地 Cloudflare Worker 登录页测试。`npm run deploy:built` 按项目要求先应用远端 D1 迁移，再查询表名，最后部署已验证的 Worker。也可执行 `npm run deploy` 一次完成检查、构建、测试和生产部署。
+`npm test` 会先构建，再运行存储链接/画廊分批查询、存储 API、Agent 放送代理、本地 Cloudflare Worker 登录页及内容 MCP/OAuth 测试。`npm run deploy:built` 按项目要求先应用远端 D1 迁移，再查询表名、部署已验证的 Worker，最后只读验证 MCP OAuth 字段和线上协议边界。也可执行 `npm run deploy` 一次完成检查、构建、测试和生产部署。
 
 生产密钥使用 `wrangler secret put` 配置，不要写入 `wrangler.jsonc`；`dist/server/wrangler.json` 是构建中间产物，生产命令使用根配置。根配置已固定当前生产账户，避免多个 Cloudflare 账户时部署到错误目标。
 

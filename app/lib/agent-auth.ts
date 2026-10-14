@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { getCurrentUser } from "./current-user";
 
-export type AgentName = "nova" | "hikari" | "codex";
+export type AgentName = "nova" | "hikari" | "codex" | "chatgpt";
 export type AgentPermission =
   | "media:read"
   | "media:create"
@@ -48,7 +48,25 @@ const PERMISSIONS: Record<AgentName, readonly AgentPermission[]> = {
     "storage:read", "storage:create", "storage:update",
   ],
   codex: FULL_PERMISSIONS,
+  chatgpt: [
+    "media:read", "media:create", "media:update", "tags:read",
+    "devices:read", "devices:create", "devices:update",
+    "gallery:read", "gallery:create", "gallery:update",
+    "video:read", "video:create", "video:update",
+    "storage:read", "storage:create", "storage:update",
+  ],
 };
+
+// Only server-created Request objects can carry this identity. No HTTP header,
+// browser cookie or existing Agent token can impersonate a ChatGPT connection.
+const contentRequests = new WeakMap<Request, AgentIdentity>();
+
+export function createChatGPTContentRequest(userKey: string, url: string | URL, init?: RequestInit) {
+  const request = new Request(url, init);
+  if (userKey !== getCurrentUser(request)) throw new Error("内容连接的用户归属不匹配");
+  contentRequests.set(request, { agent: "chatgpt", userKey, source: "openclaw" });
+  return request;
+}
 
 type AgentRuntimeEnv = typeof env & {
   YUEXIAJI_NOVA_TOKEN?: string;
@@ -71,6 +89,8 @@ function errorResponse(error: string, status: number, headers?: HeadersInit) {
 
 /** Authenticate an Agent using Authorization: Bearer <token> or X-Agent-Token. */
 export function authenticateAgent(request: Request): AgentIdentity | Response {
+  const contentIdentity = contentRequests.get(request);
+  if (contentIdentity) return contentIdentity;
   const authorization = request.headers.get("authorization") || "";
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   const token = bearer || request.headers.get("x-agent-token")?.trim();

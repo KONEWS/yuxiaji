@@ -2,6 +2,8 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { csrfFailure, getAdminSession } from "../app/lib/admin-auth";
+import { handleMcpOAuth } from "../app/lib/mcp-oauth";
+import { handleMcpRequest } from "../app/lib/mcp-server";
 
 interface Env {
   ASSETS: Fetcher;
@@ -34,6 +36,12 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // The content connector owns its OAuth checks. Browser sessions and Agent
+    // tokens do not authorize MCP calls; all other routes keep their guards.
+    if (url.pathname === "/mcp") return handleMcpRequest(request);
+    const oauthResponse = await handleMcpOAuth(request);
+    if (oauthResponse) return oauthResponse;
 
     // Agent endpoints deliberately remain Bearer-token-only. They must never
     // fall through to the administrator's browser session.

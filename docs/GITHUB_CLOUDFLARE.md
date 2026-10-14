@@ -36,11 +36,14 @@ GitHub 工作流位于 [`.github/workflows/cloudflare.yml`](../.github/workflows
 npx wrangler d1 migrations apply yuexiaji-db --remote --config wrangler.jsonc
 npx wrangler d1 execute yuexiaji-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" --config wrangler.jsonc
 npx wrangler deploy --config wrangler.jsonc
+npm run verify:content-connector
 ```
 
 GitHub CI 无交互运行迁移，Wrangler 会跳过确认并捕获备份；失败的迁移会回滚，此前成功的迁移保持已应用状态。参考 [D1 迁移命令](https://developers.cloudflare.com/d1/wrangler-commands/#d1-migrations-apply)。任何一步失败都会停止后续部署。
 
 Schema 变更必须提交经过审阅的 `drizzle/*.sql` 和对应元数据。尽量采用与当前线上版本兼容的迁移；迁移已成功而 Worker 部署失败时，数据库仍保留新 Schema。涉及删表、删列或改变已有数据含义的迁移，先按项目要求安排备份与验证，再合并生产分支。表名查询用于核对数据库对象，新增/更改列还需要检查实际字段与生产 API 回读。
+
+内容插件发布后，`verify:content-connector` 通过远端只读 SQL 验证四个 OAuth 表的实际列，再核对线上 discovery、匿名 MCP 拒绝及连接管理登录边界；不创建授权、不访问或修改收藏。验证步骤使用部署步骤已有的 Cloudflare 凭据，不能仅以表名存在代替字段核对。
 
 GitHub 保存源码、迁移、测试和配置。生产 D1 数据、R2 图片、管理员信息与密钥保存在原有 Cloudflare 资源中；更换账户或新建环境时，需要另行迁移数据并配置资源绑定和密钥。
 

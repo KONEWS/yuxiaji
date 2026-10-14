@@ -176,6 +176,13 @@
       "when": 1790939418822,
       "tag": "0024_salty_nightshade",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1791944436910,
+      "tag": "0025_solid_captain_britain",
+      "breakpoints": true
     }
   ]
 }

@@ -41,6 +41,7 @@ OpenClaw 调用链：外部 OpenClaw 主机 → `Authorization: Bearer …` → 
 | 登录与安全设置 | `app/login/page.tsx`、`app/settings/security/page.tsx`、`app/components/security-panel.tsx` |
 | Bangumi 账户设置 | `app/settings/bangumi/page.tsx` |
 | 前端类型、枚举和规范化 | `app/lib/tracker-types.ts`、`constants.ts`、`tracker-data.ts` |
+| ChatGPT 内容插件、OAuth 与连接撤销 | `app/lib/mcp-server.ts`、`mcp-content-tools.ts`、`mcp-oauth.ts`、`docs/CHATGPT_CONTENT_PLUGIN.md` |
 
 媒体类型：`anime`、`movie`、`tv`、`game`、`light_novel`、`manga`、`music`、`visual`、`video`。`book`/`novel` 在部分 API 中归一为 `light_novel`。`Anime` 是历史类型名，实际承载多种媒体。`visual` 表示画廊。
 
@@ -50,7 +51,7 @@ OpenClaw 调用链：外部 OpenClaw 主机 → `Authorization: Bearer …` → 
 
 ## 4. 数据模型
 
-Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0024`。
+Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0025`。
 
 | 表 | 用途 |
 | --- | --- |
@@ -64,6 +65,7 @@ Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0024`。
 | `bangumi_account` | Bangumi 账号绑定和加密 Access Token |
 | `external_service_credentials` | 外部集成加密凭据 |
 | `anime_airing_schedule` | 放送计划与自定义计划 |
+| `mcp_oauth_clients`、`mcp_oauth_grants`、`mcp_oauth_codes`、`mcp_oauth_tokens` | ChatGPT 内容连接、权限、一次性授权码与哈希令牌 |
 
 `user_state.anime_json` 是历史兼容字段，当前 `/api/state` 不从中读写媒体；创建偏好行时仅写 `[]` 以满足 NOT NULL。`user_subjects.thumbnail` 保留兼容画廊主封面，多图以图片表为准。
 

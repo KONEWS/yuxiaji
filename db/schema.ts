@@ -249,6 +249,55 @@ export const adminAuthLogs = sqliteTable("admin_auth_logs", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 }, (table) => [index("admin_auth_logs_event_created_idx").on(table.event, table.createdAt)]);
 
+/** Public OAuth clients can request consent, but registration grants no access. */
+export const mcpOAuthClients = sqliteTable("mcp_oauth_clients", {
+  clientId: text("client_id").primaryKey(),
+  clientName: text("client_name").notNull(),
+  redirectUrisJson: text("redirect_uris_json").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+/** A content-only consent grant belongs to the configured singleton owner. */
+export const mcpOAuthGrants = sqliteTable("mcp_oauth_grants", {
+  id: text("id").primaryKey(),
+  userKey: text("user_key").notNull(),
+  clientId: text("client_id").notNull().references(() => mcpOAuthClients.clientId),
+  resource: text("resource").notNull(),
+  scopesJson: text("scopes_json").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+  revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+}, (table) => [index("mcp_oauth_grants_owner_idx").on(table.userKey, table.createdAt)]);
+
+/** Only hashes of one-time authorization codes are stored. */
+export const mcpOAuthCodes = sqliteTable("mcp_oauth_codes", {
+  codeHash: text("code_hash").primaryKey(),
+  grantId: text("grant_id").notNull().references(() => mcpOAuthGrants.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull().references(() => mcpOAuthClients.clientId),
+  redirectUri: text("redirect_uri").notNull(),
+  resource: text("resource").notNull(),
+  codeChallenge: text("code_challenge").notNull(),
+  scopesJson: text("scopes_json").notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  consumedAt: integer("consumed_at", { mode: "timestamp_ms" }),
+}, (table) => [index("mcp_oauth_codes_grant_idx").on(table.grantId)]);
+
+/** Used refresh hashes are retained so replay revokes the whole grant family. */
+export const mcpOAuthTokens = sqliteTable("mcp_oauth_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  grantId: text("grant_id").notNull().references(() => mcpOAuthGrants.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull().references(() => mcpOAuthClients.clientId),
+  resource: text("resource").notNull(),
+  tokenType: text("token_type").notNull(),
+  scopesJson: text("scopes_json").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+  usedAt: integer("used_at", { mode: "timestamp_ms" }),
+}, (table) => [
+  index("mcp_oauth_tokens_grant_idx").on(table.grantId),
+  index("mcp_oauth_tokens_expires_idx").on(table.expiresAt),
+]);
+
 /** Encrypted Bangumi credentials for the single administrator. */
 export const bangumiAccount = sqliteTable("bangumi_account", {
   adminId: integer("admin_id").primaryKey(),

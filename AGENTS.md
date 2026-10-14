@@ -14,6 +14,7 @@
 - 当前使用 Vinext + Vite + React 的 App Router，运行在 Cloudflare Workers，数据存储是 D1 + Drizzle，展示图片在 R2，Agent 图片转换依赖 Images。
 - 网站是单管理员应用。浏览器 Session/CSRF 与 Agent Token 认证分离；保留 `worker/index.ts` 对 Agent 路径的隔离。
 - Agent 为 Nova/Hikari/Codex，权限见 `app/lib/agent-auth.ts`。Codex 使用独立 `YUEXIAJI_CODEX_TOKEN`，权限与 Nova 相同，包括删除、设备管理和标签管理，不替换现有 Token；Hikari 保留原有受限权限。写操作的幂等与审计见 `app/lib/agent-operations.ts`。
+- 普通 ChatGPT 的内容连接走 `/mcp` 和独立 OAuth；内部 `chatgpt` 身份只由授权后的服务端 Request 对象创建，没有公开 Agent Token 或 Header 入口。它仅能读取、新增、编辑内容，禁用删除、批量同步、源码、部署与账户工具。保留 `mcp-content-tools.ts` 的字段白名单，不能开放媒体类型转换或 `images` 全量替换。
 - 当前用户数据归属由 `DEFAULT_USER_ID` 决定，缺省 `owner`；不是请求参数或 Agent 名称。涉及归属问题先核对这一实现。
 - `/api/state` 保存偏好；媒体主数据在 `user_subjects`，不要重新从 `anime_json` 或浏览器缓存覆盖媒体表。
 - 网盘原图归档由外部 OpenClaw 完成；网站存展示图与存储关联。不要将网盘凭据、rclone 配置、Agent Token 或 `.dev.vars` 内容写入代码、文档或日志。
@@ -30,4 +31,4 @@
 - Vinext 会先按 progressive-action 上限解析 multipart API POST。`next.config.ts` 的 21 MiB 上限为画廊 20 MiB 文件加表单开销留空间；不能直接删除此配置，否则大图会在进入上传路由前返回 413。编译后 Worker 测试覆盖此边界。
 - Schema 变化需生成并审阅新迁移。部署不会自动应用 D1 迁移；远端迁移、生产部署和 OpenClaw 主机操作按当前用户请求执行，不能把本地检查当作线上验证。
 - 用户指定的网站更新命令顺序：`npx wrangler d1 migrations apply yuexiaji-db --remote --config wrangler.jsonc`；`npx wrangler d1 execute yuexiaji-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" --config wrangler.jsonc`；`npx wrangler deploy --config wrangler.jsonc`。部署前完成对应构建与检查，按 schema 变化核对具体列；列出表名不能代替字段与 API 回读验证。
-- `npm run deploy:built` 封装上述三步，`npm run deploy` 先检查、构建和测试再执行三步。本地生产部署与 GitHub Actions 部署只选择一个入口，避免重复发布；已推送 `master` 时优先等待对应 Actions 结果。
+- `npm run deploy:built` 封装上述三步，并在发布后只读验证 MCP OAuth 表字段和线上协议边界；`npm run deploy` 先检查、构建和测试再执行。该线上验证不创建授权、不读写收藏。本地生产部署与 GitHub Actions 部署只选择一个入口，避免重复发布；已推送 `master` 时优先等待对应 Actions 结果。

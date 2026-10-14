@@ -61,6 +61,36 @@ test("redirects an unauthenticated home request to login", async () => {
   assert.equal(new URL(location).pathname, "/login");
 });
 
+test("the compiled production Worker serves MCP discovery before the browser guard", async () => {
+  const response = await worker.fetch("/.well-known/oauth-protected-resource/mcp");
+  assert.equal(response.status, 200);
+  const metadata = await response.json();
+  assert.equal(new URL(metadata.resource).pathname, "/mcp");
+  assert.deepEqual(metadata.scopes_supported, ["content:read", "content:write", "offline_access"]);
+
+  const authorization = await worker.fetch("/.well-known/oauth-authorization-server");
+  assert.equal(authorization.status, 200);
+  const issuer = await authorization.json();
+  assert.deepEqual(metadata.authorization_servers, [issuer.issuer]);
+  assert.equal(new URL(issuer.authorization_endpoint).pathname, "/connect/chatgpt");
+});
+
+test("the compiled production Worker keeps MCP separate from browser and Agent routes", async () => {
+  const response = await worker.fetch("/mcp", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  });
+  assert.equal(response.status, 401);
+  assert.ok(response.headers.get("www-authenticate")?.includes("oauth-protected-resource/mcp"));
+  assert.match(response.headers.get("content-type") ?? "", /^application\/json\b/i);
+
+  const management = await worker.fetch("/connect/chatgpt/manage", { redirect: "manual" });
+  assert.equal(management.status, 302);
+  const login = new URL(management.headers.get("location"));
+  assert.equal(login.pathname, "/login");
+  assert.equal(login.searchParams.get("next"), "/connect/chatgpt/manage");
+});
+
 test("multipart API uploads larger than 1 MiB reach Agent authentication", async () => {
   const form = new FormData();
   form.set("image", new Blob([new Uint8Array(1200000)], { type: "image/png" }), "large.png");
