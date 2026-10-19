@@ -66,7 +66,7 @@ test("the compiled production Worker serves MCP discovery before the browser gua
   assert.equal(response.status, 200);
   const metadata = await response.json();
   assert.equal(new URL(metadata.resource).pathname, "/mcp");
-  assert.deepEqual(metadata.scopes_supported, ["content:read", "content:write", "offline_access"]);
+  assert.deepEqual(metadata.scopes_supported, ["content:read", "content:write", "content:delete", "offline_access"]);
 
   const authorization = await worker.fetch("/.well-known/oauth-authorization-server");
   assert.equal(authorization.status, 200);
