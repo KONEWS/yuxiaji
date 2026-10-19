@@ -49,11 +49,11 @@ const PERMISSIONS: Record<AgentName, readonly AgentPermission[]> = {
   ],
   codex: FULL_PERMISSIONS,
   chatgpt: [
-    "media:read", "media:create", "media:update", "tags:read",
-    "devices:read", "devices:create", "devices:update",
+    "media:read", "media:create", "media:update", "media:delete", "tags:read",
+    "devices:read", "devices:create", "devices:update", "devices:delete",
     "gallery:read", "gallery:create", "gallery:update",
     "video:read", "video:create", "video:update",
-    "storage:read", "storage:create", "storage:update",
+    "storage:read", "storage:create", "storage:update", "storage:delete",
   ],
 };
 
