@@ -13,6 +13,7 @@ let resource;
 let adminCookie;
 let writable;
 let readable;
+let deletable;
 let rpcId = 0;
 
 // Assertions deliberately avoid logging OAuth credentials, even on failure.
@@ -145,6 +146,7 @@ before(async () => {
   ]);
   writable = await connection();
   readable = await connection("content:read");
+  deletable = await connection("content:read content:write content:delete offline_access");
 });
 after(async () => { await worker?.stop(); });
 
@@ -166,6 +168,7 @@ test("OAuth discovery binds issuer and resource and advertises S256 and offline 
   assert.equal(data.token_endpoint, `${origin}/api/mcp/oauth/token`);
   assert.deepEqual(data.code_challenge_methods_supported, ["S256"]);
   assert.ok(data.scopes_supported.includes("offline_access"));
+  assert.ok(data.scopes_supported.includes("content:delete"));
   assert.ok(data.grant_types_supported.includes("refresh_token"));
 });
 
@@ -274,9 +277,16 @@ test("MCP initialization and tool metadata expose content capabilities", async (
   assert.deepEqual(initialized.body.result.capabilities, { tools: {} });
   const listed = await rpc("tools/list");
   const names = listed.body.result.tools.map((tool) => tool.name);
-  assert.equal(names.length, 13);
+  assert.equal(names.length, 16);
   for (const required of ["get_media", "create_media", "update_media", "get_device", "update_device", "list_storage_links"]) assert.ok(names.includes(required));
-  assert.ok(names.every((name) => !/delete|code|deploy|shell|fetch|account/.test(name)), "tools do not expose destructive or code operations");
+  for (const required of ["delete_media", "delete_device", "delete_storage_link"]) {
+    const tool = listed.body.result.tools.find((item) => item.name === required);
+    assert.ok(tool, required);
+    assert.equal(tool.annotations.destructiveHint, true);
+    assert.ok(tool.securitySchemes[0].scopes.includes("content:delete"));
+    assert.ok(!tool.securitySchemes[0].scopes.includes("content:write"), "delete uses an independently granted scope");
+  }
+  assert.ok(names.every((name) => !/code|deploy|shell|fetch|account/.test(name)), "tools do not expose code or account operations");
   for (const tool of listed.body.result.tools) assert.equal(tool.inputSchema.additionalProperties, false);
   successful(await call("connection_info"));
 });
@@ -291,7 +301,7 @@ test("MCP reports parse, envelope, method, parameter, and unknown-tool errors", 
   assert.equal((await invalid.json()).error.code, -32600);
   assert.equal((await rpc("arbitrary/method")).body.error.code, -32601);
   assert.equal((await rpc("initialize", {})).body.error.code, -32602);
-  assert.equal((await call("delete_media", { id: 9100 })).error.code, -32602);
+  assert.equal((await call("delete_everything", { id: 9100 })).error.code, -32602);
   const notification = await jsonRequest("/mcp", { jsonrpc: "2.0", method: "notifications/initialized" }, headers);
   assert.equal(notification.status, 202);
   assert.equal(await notification.text(), "");
@@ -316,6 +326,7 @@ test("read-only OAuth connections can read content but cannot write it", async (
   toolDenied(await call("create_media", { type: "music", title: "Denied read-only creation", idempotencyKey: "readonly-denied" }, readable));
   const afterCount = (await query("SELECT COUNT(*) AS count FROM user_subjects"))[0].count;
   assert.equal(afterCount, beforeCount);
+  toolDenied(await call("delete_media", { id: 9100, expectedTitle: "Private foreign music", confirm: true, idempotencyKey: "readonly-delete-denied" }, readable));
 });
 
 test("real music creation, retrieval, and duration patch preserve unrelated fields in D1", async () => {
@@ -501,6 +512,60 @@ test("saved storage links are verified, partial edits preserve data, and credent
   assert.equal((await query("SELECT COUNT(*) AS count FROM media_storage_links WHERE media_id=?", [media.id]))[0].count, 1);
   const tags = successful(await call("list_tags", { q: "FLAC" }));
   assert.ok(tags.tags.some((tag) => tag.tag === "FLAC" && tag.count >= 1));
+});
+
+
+test("delete permission is separate: existing edit grants cannot delete or escalate via refresh", async () => {
+  const row = successful(await call("create_media", { type: "music", title: "Permission-protected song", idempotencyKey: "delete-permission-fixture" })).media;
+  toolDenied(await call("delete_media", { id: row.id, expectedTitle: row.title, confirm: true, idempotencyKey: "delete-denied" }, writable));
+  assert.equal((await query("SELECT COUNT(*) AS count FROM user_subjects WHERE id=?", [row.id]))[0].count, 1);
+  assert.equal((await refresh(writable, { scope: "content:read content:write content:delete offline_access" })).status, 400);
+  const info = successful(await call("connection_info", {}, deletable));
+  assert.equal(info.capabilities.deleteContent, true);
+  assert.ok(info.scopes.includes("content:delete"));
+  assert.equal(successful(await call("connection_info", {}, writable)).capabilities.deleteContent, false);
+});
+
+test("delete_media requires confirmation and exact title, preserves owner isolation, and audits replay", async () => {
+  const item = successful(await call("create_media", { type: "music", title: "Delete this song", idempotencyKey: "delete-media-fixture" })).media;
+  const base = { id: item.id, expectedTitle: item.title, confirm: true, idempotencyKey: "delete-media-perform" };
+  toolDenied(await call("delete_media", { ...base, confirm: false }, deletable));
+  toolDenied(await call("delete_media", { ...base, expectedTitle: "Other song" }, deletable));
+  toolDenied(await call("delete_media", { id: 9100, expectedTitle: "Private foreign music", confirm: true, idempotencyKey: "delete-foreign" }, deletable));
+  assert.equal((await query("SELECT COUNT(*) AS count FROM user_subjects WHERE id=?", [item.id]))[0].count, 1);
+  const deleted = successful(await call("delete_media", base, deletable));
+  assert.equal(deleted.verified, true);
+  assert.equal(deleted.deleted.id, item.id);
+  assert.equal((await query("SELECT COUNT(*) AS count FROM user_subjects WHERE id=?", [item.id]))[0].count, 0);
+  assert.equal(successful(await call("delete_media", base, deletable)).replayed, true);
+  assert.equal((await query("SELECT title FROM user_subjects WHERE id=9100"))[0].title, "Private foreign music");
+  const [audit] = await query("SELECT agent,status_code FROM agent_operations WHERE resource='media' AND action='delete' AND resource_id=?", [item.id]);
+  assert.equal(audit.agent, "chatgpt");
+  assert.equal(audit.status_code, 200);
+});
+
+test("delete_device only removes a matching owned device", async () => {
+  const item = successful(await call("create_device", { name: "Discarded fixture device", idempotencyKey: "delete-device-fixture" })).device;
+  const args = { id: item.id, expectedName: item.name, confirm: true, idempotencyKey: "delete-device-perform" };
+  toolDenied(await call("delete_device", { ...args, expectedName: "Another device" }, deletable));
+  const gone = successful(await call("delete_device", args, deletable));
+  assert.equal(gone.deleted.id, item.id);
+  assert.equal(gone.verified, true);
+  assert.equal(successful(await call("delete_device", args, deletable)).replayed, true);
+  assert.equal((await query("SELECT COUNT(*) AS count FROM user_devices WHERE id=?", [item.id]))[0].count, 0);
+});
+
+test("delete_storage_link only removes the exact stored reference, not the parent media", async () => {
+  const media = successful(await call("create_media", { type: "music", title: "Keep media", idempotencyKey: "delete-link-media" })).media;
+  const link = successful(await call("add_storage_link", { mediaId: media.id, provider: "mega", path: "/Temp/file", idempotencyKey: "delete-link-create" })).storageLink;
+  const args = { mediaId: media.id, id: link.id, expectedProvider: "mega", confirm: true, idempotencyKey: "delete-link-perform" };
+  toolDenied(await call("delete_storage_link", { ...args, expectedProvider: "other" }, deletable));
+  const deleted = successful(await call("delete_storage_link", args, deletable));
+  assert.equal(deleted.verified, true);
+  assert.equal(deleted.deleted.id, link.id);
+  assert.equal(successful(await call("delete_storage_link", args, deletable)).replayed, true);
+  assert.equal((await query("SELECT COUNT(*) AS count FROM media_storage_links WHERE id=?", [link.id]))[0].count, 0);
+  assert.equal((await query("SELECT COUNT(*) AS count FROM user_subjects WHERE id=?", [media.id]))[0].count, 1);
 });
 
 test("token revocation immediately disables the entire authorization and browser management can revoke it", async () => {

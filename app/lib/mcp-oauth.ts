@@ -4,7 +4,7 @@ import { mcpOAuthClients, mcpOAuthCodes, mcpOAuthGrants, mcpOAuthTokens } from "
 import { csrfFailure, getAdminSession } from "./admin-auth";
 import { getCurrentUser } from "./current-user";
 
-const SCOPES = ["content:read", "content:write", "offline_access"] as const;
+const SCOPES = ["content:read", "content:write", "content:delete", "offline_access"] as const;
 const ACCESS_SECONDS = 3600;
 const REFRESH_SECONDS = 30 * 86400;
 const CODE_SECONDS = 300;
@@ -125,8 +125,8 @@ function parseScopes(input: string | null, fallback: string[] = ["content:read"]
   if (input === null) return [...fallback];
   if (input.length > 256) throw new OAuthError("invalid_scope", "Scope is too long");
   const scopes = [...new Set(input.trim().split(/ +/).filter(Boolean))];
-  if (!scopes.length || scopes.some((scope) => !(SCOPES as readonly string[]).includes(scope))) throw new OAuthError("invalid_scope", "Only content:read, content:write and offline_access are supported");
-  if (!scopes.includes("content:read")) throw new OAuthError("invalid_scope", "content:read is required to initialize the content connector; content:write and offline_access are optional");
+  if (!scopes.length || scopes.some((scope) => !(SCOPES as readonly string[]).includes(scope))) throw new OAuthError("invalid_scope", "Only content:read, content:write, content:delete and offline_access are supported");
+  if (!scopes.includes("content:read")) throw new OAuthError("invalid_scope", "content:read is required to initialize the content connector; content:write, content:delete and offline_access are optional");
   return scopes;
 }
 
@@ -219,7 +219,7 @@ async function validCsrf(request: Request, current: BrowserSession, token: strin
 }
 
 function permissionList(scopes: string[]) {
-  return `<ul>${scopes.includes("content:read") ? "<li>查看收藏条目、详情和藏品内容。</li>" : ""}${scopes.includes("content:write") ? "<li>新增和编辑收藏条目、备注、评分、标签及藏品内容。</li>" : ""}${scopes.includes("offline_access") ? "<li>保持连接，供后续 ChatGPT 会话继续使用；可随时撤销。</li>" : ""}</ul>`;
+  return `<ul>${scopes.includes("content:read") ? "<li>查看收藏条目、详情和藏品内容。</li>" : ""}${scopes.includes("content:write") ? "<li>新增和编辑收藏条目、备注、评分、标签及藏品内容。</li>" : ""}${scopes.includes("content:delete") ? "<li><strong>永久删除</strong>指定媒体收藏、藏品或存储关联；可能同时删除关联的展示图片和记录，不能撤销。</li>" : ""}${scopes.includes("offline_access") ? "<li>保持连接，供后续 ChatGPT 会话继续使用；可随时撤销。</li>" : ""}</ul>`;
 }
 
 async function consent(request: Request) {
