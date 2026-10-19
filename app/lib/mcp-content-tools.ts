@@ -466,7 +466,7 @@ export async function executeContentTool(
           if (records(listed.storageLinks).some((link) => positiveId(link.id) === id)) throw new Error("link still exists");
         }
       } catch (error) {
-        if (!(error instanceof ToolFailure && error.status === 404 && name !== "delete_storage_link")) {
+        if (!(error instanceof ToolFailure && error.status === 404)) {
           throw new ToolFailure("readback_failed", "删除操作已提交，但无法确认条目已消失。请先读取记录核对，不要换幂等键重试。", 502, { id });
         }
         return success({ ok: true, verified: true, replayed: response.headers.get("x-idempotent-replay") === "true",
