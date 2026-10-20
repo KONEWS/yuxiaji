@@ -48,7 +48,7 @@
 
 ### 普通 ChatGPT 内容插件
 
-- `/mcp` 提供独立 OAuth 授权的内容插件，可在普通 ChatGPT 新会话读取、添加及编辑收藏、评分、标签、藏品和存储链接；不提供源码、部署、账号、删除或批量同步工具。
+- `/mcp` 提供独立 OAuth 授权的内容插件，可在普通 ChatGPT 新会话读取、添加及编辑收藏、评分、标签、藏品和存储链接。额外授权 `content:delete` 后可删除指定的媒体收藏、藏品或存储关联，删除前须核对内部 ID 和名称并取得确认；不提供源码、部署、账号或批量同步工具。
 - 使用月下集管理员账户完成一次登录授权，不把现有 Agent Token 交给 ChatGPT。授权可在 `/connect/chatgpt/manage` 撤销，写入以 `chatgpt` 身份单独审计。
 - ChatGPT 需手动创建并安装自定义 MCP 插件。服务器地址、权限说明及使用示例见 [内容插件安装说明](docs/CHATGPT_CONTENT_PLUGIN.md)。
 

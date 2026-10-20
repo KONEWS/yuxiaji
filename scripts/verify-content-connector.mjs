@@ -47,7 +47,7 @@ await verify("/.well-known/oauth-protected-resource/mcp", {}, async (response) =
   const data = await response.json();
   assert.equal(data.resource, base + "/mcp");
   assert.deepEqual(data.authorization_servers, [base]);
-  assert.deepEqual(data.scopes_supported, ["content:read", "content:write", "offline_access"]);
+  assert.deepEqual(data.scopes_supported, ["content:read", "content:write", "content:delete", "offline_access"]);
 });
 await verify("/.well-known/oauth-authorization-server", {}, async (response) => {
   assert.equal(response.status, 200, "Production OAuth discovery succeeds");
@@ -57,6 +57,7 @@ await verify("/.well-known/oauth-authorization-server", {}, async (response) => 
   assert.equal(data.token_endpoint, base + "/api/mcp/oauth/token");
   assert.equal(data.registration_endpoint, base + "/api/mcp/oauth/register");
   assert.deepEqual(data.code_challenge_methods_supported, ["S256"]);
+  assert.deepEqual(data.scopes_supported, ["content:read", "content:write", "content:delete", "offline_access"]);
   assert.equal(data.authorization_response_iss_parameter_supported, true);
 });
 await verify("/mcp", {

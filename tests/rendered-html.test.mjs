@@ -4,11 +4,17 @@ import { unstable_dev } from "wrangler";
 
 let worker;
 
+function fetchLocal(path, init = {}) {
+  // Use the real HTTP origin. unstable_dev.fetch rewrites it to a placeholder
+  // and can stall on a redirect after a POST is rejected before reading its body.
+  const url = new URL(path, `http://${worker.address}:${worker.port}`);
+  return fetch(url, { signal: AbortSignal.timeout(15000), ...init });
+}
+
 async function uploadRequest(form) {
-  // unstable_dev's fetch proxy doesn't preserve Node FormData boundaries.
-  // Serialize it explicitly so the Worker receives a real multipart request.
+  // Serialize explicitly so the Worker receives the exact multipart boundary.
   const request = new Request("http://localhost/api/agent/gallery/upload", { method: "POST", body: form });
-  return worker.fetch("/api/agent/gallery/upload", {
+  return fetchLocal("/api/agent/gallery/upload", {
     method: "POST",
     headers: { "content-type": request.headers.get("content-type") },
     body: await request.arrayBuffer(),
@@ -37,7 +43,7 @@ after(async () => {
 });
 
 test("renders the login page in the Cloudflare Worker runtime", async () => {
-  const response = await worker.fetch("/login", {
+  const response = await fetchLocal("/login", {
     headers: { accept: "text/html" },
   });
   const html = await response.text();
@@ -50,7 +56,7 @@ test("renders the login page in the Cloudflare Worker runtime", async () => {
 });
 
 test("redirects an unauthenticated home request to login", async () => {
-  const response = await worker.fetch("/", {
+  const response = await fetchLocal("/", {
     headers: { accept: "text/html" },
     redirect: "manual",
   });
@@ -62,13 +68,13 @@ test("redirects an unauthenticated home request to login", async () => {
 });
 
 test("the compiled production Worker serves MCP discovery before the browser guard", async () => {
-  const response = await worker.fetch("/.well-known/oauth-protected-resource/mcp");
+  const response = await fetchLocal("/.well-known/oauth-protected-resource/mcp");
   assert.equal(response.status, 200);
   const metadata = await response.json();
   assert.equal(new URL(metadata.resource).pathname, "/mcp");
   assert.deepEqual(metadata.scopes_supported, ["content:read", "content:write", "content:delete", "offline_access"]);
 
-  const authorization = await worker.fetch("/.well-known/oauth-authorization-server");
+  const authorization = await fetchLocal("/.well-known/oauth-authorization-server");
   assert.equal(authorization.status, 200);
   const issuer = await authorization.json();
   assert.deepEqual(metadata.authorization_servers, [issuer.issuer]);
@@ -76,15 +82,16 @@ test("the compiled production Worker serves MCP discovery before the browser gua
 });
 
 test("the compiled production Worker keeps MCP separate from browser and Agent routes", async () => {
-  const response = await worker.fetch("/mcp", {
+  const response = await fetchLocal("/mcp", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
   });
   assert.equal(response.status, 401);
   assert.ok(response.headers.get("www-authenticate")?.includes("oauth-protected-resource/mcp"));
   assert.match(response.headers.get("content-type") ?? "", /^application\/json\b/i);
+  assert.equal((await response.json()).error, "invalid_token");
 
-  const management = await worker.fetch("/connect/chatgpt/manage", { redirect: "manual" });
+  const management = await fetchLocal("/connect/chatgpt/manage", { redirect: "manual" });
   assert.equal(management.status, 302);
   const login = new URL(management.headers.get("location"));
   assert.equal(login.pathname, "/login");
