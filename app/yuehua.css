@@ -65,3 +65,25 @@
     background: #f9f8ff; -webkit-backdrop-filter: none; backdrop-filter: none;
   }
 }
+
+/* The pseudo-element follows the selected button, including wrapped rows. */
+.theme-yuehua .yuehua-sliding { position: relative; isolation: isolate; }
+.theme-yuehua .yuehua-sliding::before {
+  content: ""; position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
+  width: var(--slide-width); height: var(--slide-height);
+  opacity: var(--slide-opacity, 0); border-radius: 99px;
+  transform: translate3d(var(--slide-x), var(--slide-y), 0);
+  background: linear-gradient(135deg, #fff, color-mix(in srgb, var(--primary) 22%, #f0edff));
+  box-shadow: inset 0 1px 0 #fff, inset 0 0 0 1px #ffffffaa, 0 3px 10px #57527820;
+}
+.theme-yuehua .yuehua-slide-ready::before {
+  transition: transform .38s cubic-bezier(.22,1,.36,1), width .38s cubic-bezier(.22,1,.36,1), height .38s cubic-bezier(.22,1,.36,1), opacity .18s ease;
+}
+.theme-yuehua .yuehua-sliding > button { position: relative; z-index: 1; transition: color .2s ease; }
+.theme-yuehua .yuehua-sliding > button.active { background: transparent; box-shadow: none; border-color: transparent; }
+@media (prefers-reduced-motion: reduce) {
+  .theme-yuehua .yuehua-slide-ready::before { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .theme-yuehua .yuehua-sliding::before { background: #e2effc; }
+}
