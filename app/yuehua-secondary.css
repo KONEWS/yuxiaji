@@ -148,6 +148,8 @@
   outline-color: #7b728d;
 }
 .theme-yuehua :is(.tag-library-chips button.active, .tag-manager-cloud-item.active, .tag-manager-actions button.active,
+  .device-chips button.active, .all-status.active, .batch-select-trigger.active, .rounded-select-menu button.active,
+  .sort-filter-bar label.active, .library-filters label.active, .music-filter-bar label.active, .calendar-filters label.active,
   .sync-type-options button.active, .source-sync-toggle:has(input:checked)) {
   border-color: #d4cede; background: linear-gradient(135deg, #ffffffed, #f3f0f8);
   box-shadow: inset 0 1px #fff; color: var(--ink);
@@ -171,3 +173,11 @@
     position: static; margin: 18px 0 0; padding: 13px 0 env(safe-area-inset-bottom);
   }
 }
+
+.theme-yuehua :is(.font-options, .title-options, .media-type-picker, .subcategory-tabs, .calendar-tabs, .calendar-source-tabs, .bangumi-sync-direction) > button.active {
+  border-color: #d4cede; background: #f3f0f8; box-shadow: inset 0 1px #fff;
+}
+.theme-yuehua .yuehua-sliding > button.active { border-color: transparent; background: transparent; box-shadow: none; }
+.theme-yuehua :is(.media-tabs, .device-category-tabs) button.active i,
+.theme-yuehua .unified-library-tabs .media-mode-button.active > i { background: #ebe7f2; color: #625771; }
+.theme-yuehua :is(.anime-card, .device-card).batch-selected { border-color: #b7afc7; box-shadow: 0 0 0 2px #d4cede66; }
