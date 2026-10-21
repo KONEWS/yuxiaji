@@ -83,7 +83,7 @@
 .theme-yuehua :is(.font-options, .title-options, .media-type-picker, .subcategory-tabs, .calendar-tabs, .calendar-source-tabs, .bangumi-sync-direction).yuehua-sliding::before { border-radius: 15px; }
 .theme-yuehua :is(.sync-type-options button, .source-sync-toggle) { border-radius: 12px; background: #ffffffa6; }
 .theme-yuehua :is(.sync-type-options button.active, .source-sync-toggle:has(input:checked)) {
-  border-color: color-mix(in srgb, var(--accent) 45%, #fff); background: color-mix(in srgb, var(--primary) 16%, #f8f4ff);
+  border-color: color-mix(in srgb, var(--accent) 45%, #fff); background: #f3f0f8;
 }
 .theme-yuehua :is(.danger-button, .manager-delete-button, .gallery-image-controls .remove) {
   border-color: #ebc6d0; background: #fff3f7; color: #a03853;
@@ -137,5 +137,37 @@
 @media (max-width: 680px) {
   .theme-yuehua :is(.sheet-overlay, .detail-overlay, .calendar-overlay, .security-overlay) {
     padding: 0; place-items: stretch;
+  }
+}
+
+/* Selection is neutral glass; reserve cyan for primary actions, not outlines. */
+.theme-yuehua :is(button, input, textarea, select):focus-visible {
+  outline: 2px solid #7b728d; outline-offset: 2px;
+}
+.theme-yuehua :is(.modal-card, .detail-drawer, .settings-sheet, .security-panel, .auth-card, .calendar-modal) :is(input, textarea, select):focus-visible {
+  outline-color: #7b728d;
+}
+.theme-yuehua :is(.tag-library-chips button.active, .tag-manager-cloud-item.active, .tag-manager-actions button.active,
+  .sync-type-options button.active, .source-sync-toggle:has(input:checked)) {
+  border-color: #d4cede; background: linear-gradient(135deg, #ffffffed, #f3f0f8);
+  box-shadow: inset 0 1px #fff; color: var(--ink);
+}
+.theme-yuehua :is(.rounded-select-trigger:focus-visible, .status-more:focus-visible) {
+  border-color: #b7afc7; box-shadow: 0 0 0 2px #d4cede66;
+}
+.theme-yuehua :is(.form-grid, .detail-form, .auth-card, .security-card, .detail-storage-editor, .detail-source-links-grid, .visual-subtype-editor, .category-name-editor, .subcategory-add) :is(input, textarea, select):focus {
+  border-color: #b7afc7; box-shadow: 0 0 0 2px #d4cede66;
+}
+/* The buttons own their surfaces; action wrappers must never paint a white slab. */
+.theme-yuehua .submit-row,
+.theme-yuehua .detail-content > footer {
+  background: transparent; background-image: none; box-shadow: none;
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+@media (max-width: 680px) {
+  .theme-yuehua .submit-row { position: static; padding-top: 12px; }
+  .theme-yuehua .detail-content { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+  .theme-yuehua .detail-content > footer {
+    position: static; margin: 18px 0 0; padding: 13px 0 env(safe-area-inset-bottom);
   }
 }
