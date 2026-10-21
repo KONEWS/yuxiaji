@@ -7,6 +7,7 @@ import { createChatGPTContentRequest } from "./agent-auth";
 import { getCurrentUser } from "./current-user";
 import { authenticateMcpRequest } from "./mcp-oauth";
 import { MCP_CONTENT_TOOLS, executeContentTool } from "./mcp-content-tools";
+import { uploadMusicCover } from "./mcp-music-cover";
 
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const MAX_REQUEST_BYTES = 128 * 1024;
@@ -15,6 +16,7 @@ const MAX_RESPONSE_BYTES = 320 * 1024;
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 type Handler = (request: Request) => Promise<Response>;
 const contentRoutes: Record<string, Partial<Record<Method, Handler>>> = {
+  "/internal/content/music-cover": { POST: uploadMusicCover },
   "/api/agent/media": { GET: media.GET, POST: media.POST, PATCH: media.PATCH, DELETE: media.DELETE },
   "/api/agent/devices": { GET: devices.GET, POST: devices.POST, PATCH: devices.PATCH, DELETE: devices.DELETE },
   "/api/agent/storage": { GET: storage.GET, POST: storage.POST, PATCH: storage.PATCH, DELETE: storage.DELETE },
@@ -65,7 +67,7 @@ function originAllowed(request: Request) {
 }
 
 /** Stateless MCP Streamable HTTP; authorization is distinct from browser/Agent auth. */
-export async function handleMcpRequest(request: Request): Promise<Response> {
+export async function handleMcpRequest(request: Request, options?: { musicCoverUploader?: Handler }): Promise<Response> {
   if (!originAllowed(request)) return rpcError(null, -32600, "不允许此请求来源", 403);
   if (request.method === "OPTIONS") {
     const headers: Record<string, string> = {
@@ -114,7 +116,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         if (typeof params.name !== "string") return rpcError(body.id, -32602, "缺少工具名称");
         if (!MCP_CONTENT_TOOLS.some((tool) => tool.name === params.name)) return rpcError(body.id, -32602, "未知的内容工具");
         result = await executeContentTool(params.name, params.arguments ?? {}, authorization, async (path, method, data, query) => {
-          const handler = contentRoutes[path]?.[method];
+          const handler = path === "/internal/content/music-cover" && method === "POST" && options?.musicCoverUploader
+            ? options.musicCoverUploader : contentRoutes[path]?.[method];
           if (!handler) throw new Error("不支持此内容操作");
           if (method === "DELETE" && !authorization.scopes.includes("content:delete")) throw new Error("连接缺少内容删除权限");
           if (method !== "GET" && method !== "DELETE" && !authorization.scopes.includes("content:write")) throw new Error("连接缺少内容编辑权限");

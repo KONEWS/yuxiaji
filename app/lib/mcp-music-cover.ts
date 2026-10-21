@@ -1,0 +1,71 @@
+import { env } from "cloudflare:workers";
+import { and, eq } from "drizzle-orm";
+import { getDb } from "../../db";
+import { userSubjects } from "../../db/schema";
+import { authenticateAgent, isAgentIdentity } from "./agent-auth";
+import { agentJson, finishAgentOperation, reserveAgentOperation } from "./agent-operations";
+import { normalizeMediaMetadata } from "./constants";
+import { chatGPTFileUrl, downloadCoverImage, transformCoverImage, type CoverImagesBinding } from "./mcp-file-image";
+
+async function hash(value: string | Uint8Array) {
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
+  const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// Internal MCP handler only: no public upload route, token or header can create
+// the ChatGPT identity. The optional processor supports isolated runtime tests.
+export async function uploadMusicCover(request: Request, processImage?: (bytes: Uint8Array) => Promise<Uint8Array>) {
+  const identity = authenticateAgent(request);
+  if (!isAgentIdentity(identity)) return identity;
+  if (identity.agent !== "chatgpt") return agentJson({ error: "仅支持已授权的内容连接" }, 403);
+  const body = await request.json() as { id: number; expectedTitle: string; idempotencyKey: string; file: { download_url: string; file_id: string; mime_type?: string } };
+  let fileUrl: URL;
+  try { fileUrl = chatGPTFileUrl(body.file?.download_url); }
+  catch (error) { return agentJson({ error: error instanceof Error ? error.message : "文件引用无效" }, 400); }
+  const db = getDb();
+  const conditions = and(eq(userSubjects.userKey, identity.userKey), eq(userSubjects.id, body.id), eq(userSubjects.type, "music"));
+  const [existing] = await db.select().from(userSubjects).where(conditions).limit(1);
+  if (!existing) return agentJson({ error: "音乐条目不存在" }, 404);
+  if (existing.title !== body.expectedTitle) return agentJson({ error: "音乐标题不匹配" }, 409);
+  const fingerprint = await hash(JSON.stringify([body.id, body.expectedTitle, body.file.file_id]));
+  const reservation = await reserveAgentOperation(identity, {
+    request, body: { idempotencyKey: body.idempotencyKey }, resource: "music_cover", action: "upload", resourceId: body.id,
+  });
+  if (reservation.kind !== "reserved") {
+    if (reservation.kind === "replayed") {
+      const previous = await reservation.response.clone().json() as { uploadFingerprint?: string };
+      if (previous.uploadFingerprint !== fingerprint) return agentJson({ error: "幂等键与原封面上传不一致" }, 409);
+    }
+    return reservation.response;
+  }
+  const image = `/api/media-assets?v=${reservation.id}`;
+  const objectKey = `media-assets/${await hash(identity.userKey)}/gallery/${reservation.id}`;
+  let stored = false;
+  let attached = false;
+  try {
+    const images = (env as typeof env & { IMAGES?: CoverImagesBinding }).IMAGES;
+    if (!processImage && !images) throw new Error("封面转换服务不可用");
+    const input = await downloadCoverImage(fileUrl, body.file.mime_type);
+    const output = processImage ? await processImage(input.bytes) : await transformCoverImage(input.bytes, images!);
+    const imageHash = await hash(input.bytes);
+    await env.BUCKET.put(objectKey, output as Uint8Array<ArrayBuffer>, { httpMetadata: { contentType: "image/webp" } });
+    stored = true;
+    let metadata: Record<string, unknown>;
+    try { metadata = JSON.parse(existing.metadata); } catch { metadata = {}; }
+    const [saved] = await db.update(userSubjects).set({
+      image, metadata: JSON.stringify(normalizeMediaMetadata({ ...metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 })), updatedAt: new Date(),
+    }).where(and(conditions, eq(userSubjects.title, body.expectedTitle), eq(userSubjects.updatedAt, existing.updatedAt))).returning({ id: userSubjects.id });
+    if (!saved) throw new Error("音乐条目已被其他操作修改");
+    attached = true;
+    const payload = { ok: true, id: body.id, image, imageHash, uploadFingerprint: fingerprint };
+    await finishAgentOperation(reservation.id, 200, payload);
+    return agentJson(payload);
+  } catch {
+    // Never persist or return signed file URLs, underlying fetch errors or tokens.
+    if (stored && !attached) await env.BUCKET.delete(objectKey).catch(() => undefined);
+    const payload = { error: "封面上传未完成，请读取条目核对；文件链接失效时重新附图并使用新的上传键", uploadFingerprint: fingerprint };
+    await finishAgentOperation(reservation.id, 502, payload).catch(() => undefined);
+    return agentJson(payload, 502);
+  }
+}

@@ -42,6 +42,7 @@ OpenClaw 调用链：外部 OpenClaw 主机 → `Authorization: Bearer …` → 
 | Bangumi 账户设置 | `app/settings/bangumi/page.tsx` |
 | 前端类型、枚举和规范化 | `app/lib/tracker-types.ts`、`constants.ts`、`tracker-data.ts` |
 | ChatGPT 内容插件、OAuth 与连接撤销 | `app/lib/mcp-server.ts`、`mcp-content-tools.ts`、`mcp-oauth.ts`、`docs/CHATGPT_CONTENT_PLUGIN.md` |
+| ChatGPT 音乐封面附图上传 | `app/lib/mcp-file-image.ts`、`mcp-music-cover.ts`；经 OAuth 内部调用，未增加公开 Agent 入口 |
 
 媒体类型：`anime`、`movie`、`tv`、`game`、`light_novel`、`manga`、`music`、`visual`、`video`。`book`/`novel` 在部分 API 中归一为 `light_novel`。`Anime` 是历史类型名，实际承载多种媒体。`visual` 表示画廊。
 

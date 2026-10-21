@@ -66,8 +66,8 @@ const metadataFields: Record<string, FieldSchema> = {
   bookKind: enumeration(["book", "light_novel"]),
   coverPositionX: integer(0, 100), coverPositionY: integer(0, 100), coverZoom: integer(100, 240),
 };
-// Inputs never accept arbitrary metadata maps, owner identities, tokens, file
-// uploads, image-list replacement, or a media-type change on an existing row.
+// General edits never accept arbitrary metadata maps, owner identities, tokens,
+// image-list replacement, or a media-type change on an existing row.
 const mediaFields: Record<string, FieldSchema> = {
   title: text(160, 1), jp: text(160), note: text(2000),
   progress: integer(0, 100000), total: integer(1, 100000),
@@ -99,7 +99,7 @@ const storageFields: Record<string, FieldSchema> = {
 function schema(properties: Record<string, FieldSchema>, required: string[] = []): InputSchema {
   return { type: "object", properties, required, additionalProperties: false };
 }
-function defineTool(name: string, title: string, description: string, inputSchema: InputSchema, write = false, update = false, destructive = false) {
+function defineTool(name: string, title: string, description: string, inputSchema: InputSchema, write = false, update = false, destructive = false, fileParams?: string[]) {
   // Request refresh-token support during a normal ChatGPT installation.
   // Existing read-only access tokens without offline_access remain valid.
   const securitySchemes = [{ type: "oauth2", scopes: destructive
@@ -111,11 +111,19 @@ function defineTool(name: string, title: string, description: string, inputSchem
     inputSchema,
     annotations: { readOnlyHint: !write, destructiveHint: destructive || update, idempotentHint: true, openWorldHint: false },
     securitySchemes,
-    _meta: { securitySchemes },
+    _meta: { securitySchemes, ...(fileParams ? { "openai/fileParams": fileParams } : {}) },
   };
 }
 
+const musicCoverTool = defineTool("upload_music_cover", "上传音乐封面", "Upload a user-provided JPEG, PNG or WebP file as the cover of one existing music record. First read its internal ID and title and supply expectedTitle. Accepts only ChatGPT file references, up to 20 MiB; creates a display image and verifies the saved cover. Reuse the same idempotencyKey on retries. Does not import archives or fetch arbitrary image URLs.", schema({
+  id: idField, expectedTitle: text(160, 1), idempotencyKey: keyField,
+  file: { type: "object", properties: {
+    download_url: text(8192, 1), file_id: text(200, 1), mime_type: text(100), file_name: text(255),
+  }, required: ["download_url", "file_id"], additionalProperties: false },
+}, ["id", "expectedTitle", "file", "idempotencyKey"]), true, true, false, ["file"]);
+
 export const MCP_CONTENT_TOOLS = [
+  musicCoverTool,
   defineTool("connection_info", "月下集连接与权限", "Describe this content connection and its granted scopes. This connection manages collection content only.", schema({})),
   defineTool("search_media", "搜索媒体收藏", "Search the existing collection. Returns bounded summaries; use get_media for complete details. Defaults to limit 20, offset 0.", schema({
     q: text(80), type: enumeration(MEDIA_TYPES), status: enumeration(MEDIA_STATUSES), collection: text(120), tag: text(80), ...paginationFields,
@@ -386,9 +394,9 @@ export async function executeContentTool(
     const input = validateObject(args, tool.inputSchema);
     if (name === "connection_info") {
       return success({ name: "月下集", connected: true, scopes: context.scopes.filter((item) => item === READ_SCOPE || item === WRITE_SCOPE || item === DELETE_SCOPE),
-        capabilities: { readContent: context.scopes.includes(READ_SCOPE), createAndEditContent: context.scopes.includes(WRITE_SCOPE), deleteContent: context.scopes.includes(DELETE_SCOPE) },
+        capabilities: { readContent: context.scopes.includes(READ_SCOPE), createAndEditContent: context.scopes.includes(WRITE_SCOPE), deleteContent: context.scopes.includes(DELETE_SCOPE), uploadMusicCover: context.scopes.includes(WRITE_SCOPE) },
         limits: { maxPageSize: 50, maxDetailBytes: MAX_RESULT_BYTES },
-        excludedCapabilities: ["replace_gallery_images", "file_uploads", "code_changes", "deployments", "credentials", "external_url_fetch"],
+        excludedCapabilities: ["replace_gallery_images", "arbitrary_file_uploads", "archive_import", "code_changes", "deployments", "credentials", "external_url_fetch"],
       });
     }
     if (name === "search_media") {
@@ -396,6 +404,17 @@ export async function executeContentTool(
       return success(page(records(payload.subjects).map(mediaSummary), input, "subjects"));
     }
     if (name === "get_media") return success({ media: mediaDetail(await getMedia(input.id as number, invoke)) });
+    if (name === "upload_music_cover") {
+      const id = input.id as number;
+      const existing = await getMedia(id, invoke);
+      if (existing.type !== "music") invalid("arguments.id", "只能为音乐条目上传封面");
+      if (existing.title !== input.expectedTitle) invalid("arguments.expectedTitle", "标题与当前音乐条目不一致");
+      const key = await writeKey(context, name, input.idempotencyKey as string);
+      const payload = await readResponse(await invoke("/internal/content/music-cover", "POST", { ...input, idempotencyKey: key }), true);
+      const saved = await getMedia(id, invoke);
+      if (saved.image !== payload.image || saved.type !== "music") throw new ToolFailure("write_unconfirmed", "封面已处理，但回读结果不一致，请读取条目后核对。", 502);
+      return success({ media: mediaDetail(saved), imageHash: payload.imageHash });
+    }
     if (name === "list_tags") {
       const payload = await readResponse(await invoke("/api/agent/tags", "GET"));
       const q = String(input.q || "").toLocaleLowerCase();
