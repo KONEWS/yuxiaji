@@ -6,9 +6,8 @@ import { useEffect } from "react";
 // buttons and data. No inserted children, remounts, or extra API requests.
 export function YuehuaMotion() {
   useEffect(() => {
-    const root = document.querySelector<HTMLElement>(".app-shell");
-    if (!root) return;
-    const selector = ".desktop-nav, .mobile-view-tabs, .status-tabs, .media-tabs, .view-toggle, .week-strip, .device-category-tabs, .collection-chips";
+    const root = document.body;
+    const selector = ".desktop-nav, .mobile-view-tabs, .status-tabs, .media-tabs, .view-toggle, .week-strip, .device-category-tabs, .collection-chips, .calendar-tabs, .calendar-source-tabs, .subcategory-tabs, .font-options, .title-options, .media-type-picker, .bangumi-sync-direction";
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     const watched = new Set<HTMLElement>();
     const selected = new WeakMap<HTMLElement, HTMLElement | null>();
@@ -19,9 +18,12 @@ export function YuehuaMotion() {
 
     function animateContent(group: HTMLElement) {
       if (reduced.matches) return;
+      const dialog = group.closest<HTMLElement>('[role="dialog"]');
       const target = group.matches(".week-strip")
-        ? root!.querySelector<HTMLElement>(".schedule-list")
-        : root!.querySelector<HTMLElement>(".anime-grid, .device-grid");
+        ? root.querySelector<HTMLElement>(".schedule-list")
+        : dialog
+          ? dialog.querySelector<HTMLElement>(".calendar-body, .subcategory-sort-list, .tag-manager-list, .tag-manager-cloud, .form-grid")
+          : root.querySelector<HTMLElement>(".anime-grid, .device-grid");
       if (!target) return;
       animations.get(target)?.cancel();
       const animation = target.animate([
