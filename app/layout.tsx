@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./yuehua.css";
+import "./yuehua-secondary.css";
+import { YuehuaMotion } from "./components/tracker/yuehua-motion";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://tsuki-anime-rebuild.op311i5lxa.chatgpt.site"),
@@ -27,5 +29,5 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <link rel="icon" href="/favicon-192.png?v=2" sizes="192x192" type="image/png" />
     <link rel="icon" href="/favicon.png?v=2" sizes="512x512" type="image/png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  </head><body>{children}</body></html>;
+  </head><body className="theme-yuehua">{children}<YuehuaMotion /></body></html>;
 }

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { customBackgroundUrl, fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, loadDevices, loadMedia, loadTrackerState, removeDevice, removeMedia, saveDevice, saveMedia, saveTrackerState, searchRemoteAnime, uploadAvatar, uploadCustomBackground, uploadMediaImage, type MediaRecordPayload } from "./lib/client-api";
 import { defaultDeviceCategoryLabels, defaultDeviceSubCategories, defaultSyncSettings, defaultTagPreferences, defaultVideoSubtypeLabels, defaultVisualSubtypeLabels, deviceCategoriesForPreferences, isCollectionMediaType, normalizeDeviceCategoryLabels, normalizeDeviceSubCategories, normalizeMediaMetadata, normalizeMediaType, normalizeSyncSettings, normalizeTagPreferences, normalizeVideoSubtype, normalizeVideoSubtypeLabels, normalizeVisualSubtype, normalizeVisualSubtypeLabels, tagDisplayName, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap, type SyncField, type SyncProvider, type SyncSettings, type TagPreferences, type VideoSubtypeLabels, type VisualSubtypeLabels } from "./lib/constants";
-import { YuehuaMotion } from "./components/tracker/yuehua-motion";
 import { CollectionSummary } from "./components/tracker/collection-summary";
 import { DeviceLibrary, normalizeDevice as normalizeLibraryDevice } from "./components/tracker/device-library";
 import { DeviceModal, DeviceSubCategoryModal, ReceiptModal } from "./components/tracker/device-modals";
@@ -1043,7 +1042,6 @@ export default function Home() {
   const openSyncDialog = (target: SyncTarget) => { setModal(null); setSyncDialogTarget(target); };
 
   return <main className={`app-shell font-${font} theme-yuehua ${closingModal ? "secondary-closing" : ""}`} style={{ "--softness": softness / 100, "--primary": primaryColor, "--accent": accentColor } as React.CSSProperties}>
-    <YuehuaMotion />
     {backgroundVersion > 0 && <div className="custom-background" style={{ backgroundImage: `url("${customBackgroundUrl(backgroundVersion)}")` }} />}
     <header className="topbar"><div className="topbar-inner">
       <button className="brand moon-brand" aria-label="月下集首页" title="返回首页" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setIncludeStandaloneMedia(false); setActiveCollection("all"); setActiveTags([]); }}><svg className="moon-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><radialGradient id="yuehua-moon" cx=".35" cy=".3" r=".75"><stop stopColor="#ffffff" /><stop offset=".6" stopColor="#f3f5ff" /><stop offset="1" stopColor="#b5d4f4" /></radialGradient></defs><circle cx="16" cy="16" r="11.5" fill="url(#yuehua-moon)" stroke="#b5cae9" strokeWidth=".5" /><g fill="#a1b3ce" opacity=".18"><circle cx="12" cy="12" r="2.6" /><circle cx="20" cy="18" r="3.4" /><circle cx="12.5" cy="22" r="1.7" /></g></svg></button>
