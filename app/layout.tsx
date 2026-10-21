@@ -1,20 +1,21 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./yuehua.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://tsuki-anime-rebuild.op311i5lxa.chatgpt.site"),
-  title: "月下集",
-  description: "把喜欢的作品，都收进月光里。动画、游戏、书籍、漫画与音乐的个人收藏中心。",
+  title: "���¼�",
+  description: "��ϲ������Ʒ�����ս��¹����������Ϸ���鼮�����������ֵĸ����ղ����ġ�",
   openGraph: {
-    title: "月下集",
-    description: "把喜欢的作品，都收进月光里。",
+    title: "���¼�",
+    description: "��ϲ������Ʒ�����ս��¹��",
     type: "website",
-    images: [{ url: "/og.png", width: 1672, height: 941, alt: "月下集" }],
+    images: [{ url: "/og.png", width: 1672, height: 941, alt: "���¼�" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "月下集",
-    description: "把喜欢的作品，都收进月光里。",
+    title: "���¼�",
+    description: "��ϲ������Ʒ�����ս��¹��",
     images: ["/og.png"],
   },
 };
