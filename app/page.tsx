@@ -235,6 +235,20 @@ function mediaPayload(item: Anime, id?: number): MediaRecordPayload {
 
 
 export default function Home() {
+  const [yuehua, setYuehua] = useState(false);
+  useEffect(() => {
+    const preview = new URLSearchParams(window.location.search).get("theme");
+    const frame = window.requestAnimationFrame(() => setYuehua(preview === "yuehua" || (preview !== "classic" && readClientCache<string>("yuexiaji:appearance:v1") === "yuehua")));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  const toggleYuehua = () => {
+    const next = !yuehua;
+    setYuehua(next);
+    writeClientCache("yuexiaji:appearance:v1", next ? "yuehua" : "classic");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("theme");
+    window.history.replaceState(window.history.state, "", url);
+  };
   const [anime, setAnime] = useState<Anime[]>([]);
   const [modal, setModal] = useState<Modal>(null);
   const [closingModal, setClosingModal] = useState<NonNullable<Modal> | null>(null);
@@ -1041,7 +1055,8 @@ export default function Home() {
   };
   const openSyncDialog = (target: SyncTarget) => { setModal(null); setSyncDialogTarget(target); };
 
-  return <main className={`app-shell font-${font} ${closingModal ? "secondary-closing" : ""}`} style={{ "--softness": softness / 100, "--primary": primaryColor, "--accent": accentColor } as React.CSSProperties}>
+  return <main className={`app-shell font-${font} ${yuehua ? "theme-yuehua" : ""} ${closingModal ? "secondary-closing" : ""}`} style={{ "--softness": softness / 100, "--primary": primaryColor, "--accent": accentColor } as React.CSSProperties}>
+    <button type="button" className="appearance-switch" onClick={toggleYuehua} aria-pressed={yuehua} title={yuehua ? "切换至经典外观" : "预览月华液态玻璃外观"}><span aria-hidden="true">☾</span>{yuehua ? "月华 · 已开启" : "月华 · 预览"}</button>
     {backgroundVersion > 0 && <div className="custom-background" style={{ backgroundImage: `url("${customBackgroundUrl(backgroundVersion)}")` }} />}
     <header className="topbar"><div className="topbar-inner">
       <button className="brand" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setIncludeStandaloneMedia(false); setActiveCollection("all"); setActiveTags([]); }}><i />月下集</button>

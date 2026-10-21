@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./yuehua.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://tsuki-anime-rebuild.op311i5lxa.chatgpt.site"),
