@@ -1,12 +1,4 @@
-/* Yuehua is an opt-in appearance. Opaque surfaces are the baseline fallback. */
-.appearance-switch {
-  position: fixed; right: 24px; bottom: 24px; z-index: 75;
-  min-height: 44px; padding: 0 18px; display: flex; align-items: center; gap: 9px;
-  border: 1px solid #d4d8ec; border-radius: 99px; background: #f6f5ff;
-  color: #464268; box-shadow: 0 6px 24px #49447520; font-size: 12px;
-}
-.appearance-switch span { font-size: 23px; }
-.appearance-switch[aria-pressed="true"] { background: #ece9ff; border-color: #b6acd9; }
+/* Yuehua is the permanent appearance. Opaque surfaces are the baseline fallback. */
 .theme-yuehua {
   --ink: #28263d; --muted: #62647a; --soft: #73768b;
   --line: #dedfee; --line-strong: #cccee3;
@@ -18,7 +10,9 @@
 .theme-yuehua .custom-background { z-index: -1; }
 .theme-yuehua .custom-background::after { background: #eeedfa33; }
 .theme-yuehua .topbar { background: #f7f7ffed; border-bottom-color: #ffffffbf; box-shadow: 0 8px 30px #4f47780b; }
-.theme-yuehua .brand i { box-shadow: 5px 0 0 -2px var(--accent), 0 0 20px #66ccff70; }
+.theme-yuehua .moon-brand { width: 44px; height: 44px; justify-content: center; flex: 0 0 44px; border-radius: 50%; }
+.theme-yuehua .moon-mark { width: 34px; height: 34px; overflow: visible; filter: drop-shadow(0 0 5px #a7dcff) drop-shadow(0 0 12px #a99bed99); }
+.theme-yuehua .moon-brand:hover .moon-mark { filter: drop-shadow(0 0 7px #a7dcff) drop-shadow(0 0 15px #a99bedbb); }
 .theme-yuehua .desktop-nav { height: auto; padding: 5px; gap: 4px; border-radius: 99px; background: #e4e6f366; }
 .theme-yuehua .desktop-nav button { height: 36px; padding: 0 18px; border-radius: 99px; }
 .theme-yuehua .desktop-nav button.active { background: #ffffffcc; box-shadow: inset 0 1px white, 0 3px 10px #514a7312; }
@@ -57,7 +51,6 @@
   .theme-yuehua :is(.anime-card, .device-card):hover { border-color: #c9c3e9; box-shadow: inset 0 1px white, 0 14px 32px #514a7326; }
 }
 @media (max-width: 680px) {
-  .appearance-switch { right: 14px; bottom: calc(78px + env(safe-area-inset-bottom)); min-height: 40px; padding-inline: 13px; font-size: 11px; }
   .theme-yuehua :is(.anime-card, .device-card) { border-radius: 15px; }
   .theme-yuehua .schedule-panel { padding: 16px; }
   .theme-yuehua .modal-card { border-radius: 22px 22px 0 0; }
