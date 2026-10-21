@@ -9,5 +9,6 @@
     "YUEXIAJI_CODEX_TOKEN": "test-codex-token",
     "DEFAULT_USER_ID": "mcp-test-owner"
   },
-  "d1_databases": [{ "binding": "DB", "database_name": "mcp-test", "database_id": "00000000-0000-0000-0000-000000000003" }]
+  "d1_databases": [{ "binding": "DB", "database_name": "mcp-test", "database_id": "00000000-0000-0000-0000-000000000003" }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "mcp-test-assets" }]
 }

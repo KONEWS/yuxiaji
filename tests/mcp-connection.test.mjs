@@ -122,6 +122,61 @@ function successful(body) {
 function toolDenied(body) {
   assert.ok(body.error || body.result?.isError, "operation is rejected before writing");
 }
+
+test("music cover tool declares native ChatGPT file inputs and restricts writes before downloads", async () => {
+  const listed = await rpc("tools/list");
+  const tool = listed.body.result.tools.find((entry) => entry.name === "upload_music_cover");
+  assert.deepEqual(tool._meta["openai/fileParams"], ["file"]);
+  assert.deepEqual(tool.inputSchema.properties.file.required, ["download_url", "file_id"]);
+  assert.deepEqual(Object.keys(tool.inputSchema.properties.file.properties).sort(), ["download_url", "file_id", "file_name", "mime_type"]);
+  const media = successful(await call("create_media", { type: "music", title: "Cover permissions", idempotencyKey: "cover-permissions-create" })).media;
+  const base = { id: media.id, expectedTitle: media.title, idempotencyKey: "cover-permissions", file: { file_id: "file-fixture", download_url: "https://files.oaiusercontent.com/fixture.webp" } };
+  const before = await (await fetchLocal("/__test/image-downloads")).json();
+  toolDenied(await call("upload_music_cover", base, readable));
+  toolDenied(await call("upload_music_cover", { ...base, expectedTitle: "Wrong song" }));
+  toolDenied(await call("upload_music_cover", { ...base, id: 9100, expectedTitle: "Private foreign music" }));
+  toolDenied(await call("upload_music_cover", { ...base, file: { ...base.file, token: "not-allowed" } }));
+  for (const download_url of ["http://127.0.0.1/private", "https://files.oaiusercontent.com.attacker.invalid/image", "https://files.oaiusercontent.com@evil.invalid/image", "https://files.oaiusercontent.com:444/image"]) {
+    toolDenied(await call("upload_music_cover", { ...base, file: { ...base.file, download_url } }));
+  }
+  const after = await (await fetchLocal("/__test/image-downloads")).json();
+  assert.equal(after.count, before.count, "rejected requests never download files");
+});
+
+test("music cover upload stores a display image, preserves song fields, reads back and replays without downloading again", async () => {
+  const media = successful(await call("create_media", { type: "music", title: "Cover roundtrip", musicArtist: "Artist", musicAlbum: "Album", tags: ["keep"], score: 9, metadata: { duration: "03:42", overview: "Keep overview", coverZoom: 150 }, idempotencyKey: "cover-roundtrip-create" })).media;
+  const base = { id: media.id, expectedTitle: media.title, idempotencyKey: "cover-roundtrip", file: { file_id: "file-roundtrip", download_url: "https://files.oaiusercontent.com/fixture.webp?temporary-secret=do-not-log", mime_type: "image/webp", file_name: "cover.webp" } };
+  const result = successful(await call("upload_music_cover", base));
+  assert.match(result.media.image, /^\/api\/media-assets\?v=\d+$/);
+  assert.equal(result.media.musicArtist, "Artist");
+  assert.equal(result.media.musicAlbum, "Album");
+  assert.deepEqual(result.media.tags, ["keep"]);
+  assert.equal(result.media.score, 9);
+  assert.equal(result.media.metadata.duration, "03:42");
+  assert.equal(result.media.metadata.overview, "Keep overview");
+  assert.equal(result.media.metadata.coverZoom, 100);
+  const image = await fetchLocal(result.media.image);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get("content-type"), "image/webp");
+  assert.equal((await image.arrayBuffer()).byteLength, 16);
+  const before = await (await fetchLocal("/__test/image-downloads")).json();
+  const replay = successful(await call("upload_music_cover", { ...base, file: { ...base.file, download_url: "https://files.oaiusercontent.com/expired.webp" } }));
+  assert.equal(replay.media.image, result.media.image);
+  assert.equal((await (await fetchLocal("/__test/image-downloads")).json()).count, before.count);
+  toolDenied(await call("upload_music_cover", { ...base, file: { ...base.file, file_id: "file-different" } }));
+  const logs = await query("SELECT response_json FROM agent_operations WHERE resource='music_cover'");
+  assert.ok(!JSON.stringify(logs).includes("temporary-secret"), "signed URLs never enter operation logs");
+  assert.ok(!JSON.stringify(logs).includes("file-roundtrip"), "file references are fingerprinted");
+});
+
+test("failed music cover downloads leave the existing cover untouched", async () => {
+  const media = successful(await call("create_media", { type: "music", title: "Cover failure", image: "https://example.com/keep.webp", idempotencyKey: "cover-failure-create" })).media;
+  for (const [index, path] of ["oversize.webp", "not-image.html"].entries()) {
+    toolDenied(await call("upload_music_cover", { id: media.id, expectedTitle: media.title, idempotencyKey: `cover-failure-${index}`, file: { file_id: `file-failure-${index}`, download_url: `https://files.oaiusercontent.com/${path}` } }));
+    const saved = successful(await call("get_media", { id: media.id })).media;
+    assert.equal(saved.image, media.image);
+  }
+});
 async function refresh(credentials, overrides = {}) {
   return tokenRequest({ grant_type: "refresh_token", client_id: credentials.clientId, refresh_token: credentials.refresh_token, resource, ...overrides });
 }
@@ -277,7 +332,7 @@ test("MCP initialization and tool metadata expose content capabilities", async (
   assert.deepEqual(initialized.body.result.capabilities, { tools: {} });
   const listed = await rpc("tools/list");
   const names = listed.body.result.tools.map((tool) => tool.name);
-  assert.equal(names.length, 16);
+  assert.equal(names.length, 17);
   for (const required of ["get_media", "create_media", "update_media", "get_device", "update_device", "list_storage_links"]) assert.ok(names.includes(required));
   for (const required of ["delete_media", "delete_device", "delete_storage_link"]) {
     const tool = listed.body.result.tools.find((item) => item.name === required);
