@@ -128,3 +128,14 @@
     backdrop-filter: none; -webkit-backdrop-filter: none;
   }
 }
+
+/* Full-height mobile drawers must not inherit the generic modal gutter. */
+.theme-yuehua .settings-sheet .color-option label input,
+.theme-yuehua .modal-card .tag-manager-search input {
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
+}
+@media (max-width: 680px) {
+  .theme-yuehua :is(.sheet-overlay, .detail-overlay, .calendar-overlay, .security-overlay) {
+    padding: 0; place-items: stretch;
+  }
+}
