@@ -235,20 +235,6 @@ function mediaPayload(item: Anime, id?: number): MediaRecordPayload {
 
 
 export default function Home() {
-  const [yuehua, setYuehua] = useState(false);
-  useEffect(() => {
-    const preview = new URLSearchParams(window.location.search).get("theme");
-    const frame = window.requestAnimationFrame(() => setYuehua(preview === "yuehua" || (preview !== "classic" && readClientCache<string>("yuexiaji:appearance:v1") === "yuehua")));
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-  const toggleYuehua = () => {
-    const next = !yuehua;
-    setYuehua(next);
-    writeClientCache("yuexiaji:appearance:v1", next ? "yuehua" : "classic");
-    const url = new URL(window.location.href);
-    url.searchParams.delete("theme");
-    window.history.replaceState(window.history.state, "", url);
-  };
   const [anime, setAnime] = useState<Anime[]>([]);
   const [modal, setModal] = useState<Modal>(null);
   const [closingModal, setClosingModal] = useState<NonNullable<Modal> | null>(null);
@@ -1055,11 +1041,10 @@ export default function Home() {
   };
   const openSyncDialog = (target: SyncTarget) => { setModal(null); setSyncDialogTarget(target); };
 
-  return <main className={`app-shell font-${font} ${yuehua ? "theme-yuehua" : ""} ${closingModal ? "secondary-closing" : ""}`} style={{ "--softness": softness / 100, "--primary": primaryColor, "--accent": accentColor } as React.CSSProperties}>
-    <button type="button" className="appearance-switch" onClick={toggleYuehua} aria-pressed={yuehua} title={yuehua ? "切换至经典外观" : "预览月华液态玻璃外观"}><span aria-hidden="true">☾</span>{yuehua ? "月华 · 已开启" : "月华 · 预览"}</button>
+  return <main className={`app-shell font-${font} theme-yuehua ${closingModal ? "secondary-closing" : ""}`} style={{ "--softness": softness / 100, "--primary": primaryColor, "--accent": accentColor } as React.CSSProperties}>
     {backgroundVersion > 0 && <div className="custom-background" style={{ backgroundImage: `url("${customBackgroundUrl(backgroundVersion)}")` }} />}
     <header className="topbar"><div className="topbar-inner">
-      <button className="brand" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setIncludeStandaloneMedia(false); setActiveCollection("all"); setActiveTags([]); }}><i />月下集</button>
+      <button className="brand moon-brand" aria-label="月下集首页" title="返回首页" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setIncludeStandaloneMedia(false); setActiveCollection("all"); setActiveTags([]); }}><svg className="moon-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><linearGradient id="yuehua-moon" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#ffffff" /><stop offset=".55" stopColor="#b5e6ff" /><stop offset="1" stopColor="#b5a4ef" /></linearGradient></defs><path d="M27 19.5A12 12 0 0 1 12.5 5 12 12 0 1 0 27 19.5Z" fill="url(#yuehua-moon)" stroke="#82b8dc" strokeWidth=".6" /></svg></button>
       <nav className="desktop-nav" aria-label="一级导航"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>藏品库</button></nav>
       <label className="library-search"><span>⌕</span><input value={listQuery} onChange={(event) => setListQuery(event.target.value)} placeholder={activeView === "devices" ? "搜索设备、标签或子类" : "搜索我的收藏"} /></label>
       <div className="header-actions"><button className="icon-button health-dot" onClick={() => setModal("connectivity")} aria-label="连通性检查"><i /></button><button className={`quiet-button sync-trigger ${modal === "sync" ? "open" : ""}`} onClick={() => modal === "sync" ? closeSecondary() : setModal("sync")} aria-expanded={modal === "sync"}><span className="button-label">同步</span><i className="sync-chevron" aria-hidden="true" /></button><button className="primary-button add-trigger" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><span className="plus-icon" aria-hidden="true">＋</span><span className="button-label">添加</span></button><button className="avatar" onClick={() => setModal("settings")} aria-label="打开偏好设置">{avatarUrl ? <img src={avatarUrl} alt="自定义头像" /> : "泽"}</button>{modal === "sync" && <><button className="popover-dismiss" onClick={() => closeSecondary()} aria-label="关闭同步菜单" /><SyncMenu close={() => closeSecondary()} syncing={syncing} open={openSyncDialog} /></>}</div>
