@@ -83,7 +83,7 @@ function calendarEntryMatches(item: Anime, entry: CalendarEntry) {
   }
   // A title is only a safe fallback for entries explicitly created from the
   // calendar. Ordinary hand-entered records with the same title must remain.
-  const explicitlyTracked = item.tags.some((tag) => tag.trim() === "����׷��");
+  const explicitlyTracked = item.tags.some((tag) => tag.trim() === "放送追更");
   return explicitlyTracked && (item.title === entry.title || Boolean(item.jp && entry.jp && item.jp === entry.jp));
 }
 
@@ -148,7 +148,7 @@ function normalizeLoadedAnime(item: Partial<Anime> & Record<string, unknown>, in
   const thumbnail = typeof item.thumbnail === "string" ? item.thumbnail : ["visual", "video"].includes(mediaType) && typeof item.image === "string" ? item.image : undefined;
   return {
     id: Number.isSafeInteger(rawId) && rawId > 0 ? rawId : Date.now() + index,
-    title: typeof item.title === "string" && item.title.trim() ? item.title : "δ��������",
+    title: typeof item.title === "string" && item.title.trim() ? item.title : "未命名番剧",
     jp: typeof item.jp === "string" ? item.jp : "",
     note: typeof item.note === "string" ? item.note : typeof item.description === "string" ? item.description : "",
     progress,
@@ -190,7 +190,7 @@ function normalizeLoadedAnime(item: Partial<Anime> & Record<string, unknown>, in
 }
 
 function mediaPayload(item: Anime, id?: number): MediaRecordPayload {
-  const tags = splitTags([...item.tags, ...(item.characterTags || [])].join("��"));
+  const tags = splitTags([...item.tags, ...(item.characterTags || [])].join("，"));
   return {
     ...(id ? { id } : {}),
     mediaType: item.mediaType || "anime",
@@ -238,7 +238,8 @@ export default function Home() {
   const [yuehua, setYuehua] = useState(false);
   useEffect(() => {
     const preview = new URLSearchParams(window.location.search).get("theme");
-    setYuehua(preview === "yuehua" || (preview !== "classic" && readClientCache<string>("yuexiaji:appearance:v1") === "yuehua"));
+    const frame = window.requestAnimationFrame(() => setYuehua(preview === "yuehua" || (preview !== "classic" && readClientCache<string>("yuexiaji:appearance:v1") === "yuehua")));
+    return () => window.cancelAnimationFrame(frame);
   }, []);
   const toggleYuehua = () => {
     const next = !yuehua;
@@ -251,7 +252,7 @@ export default function Home() {
   const [anime, setAnime] = useState<Anime[]>([]);
   const [modal, setModal] = useState<Modal>(null);
   const [closingModal, setClosingModal] = useState<NonNullable<Modal> | null>(null);
-  const [calendarDay, setCalendarDay] = useState<CalendarDay>("��");
+  const [calendarDay, setCalendarDay] = useState<CalendarDay>("五");
   const [activeStatus, setActiveStatus] = useState<Status | "all">("watching");
   const [activeMedia, setActiveMedia] = useState<MediaType | "all">("all");
   const [includeStandaloneMedia, setIncludeStandaloneMedia] = useState(false);
@@ -289,7 +290,7 @@ export default function Home() {
   const [avatarUrl, setAvatarUrl] = useState("");
   const [titleMode, setTitleMode] = useState("cn");
   const [backgroundVersion, setBackgroundVersion] = useState(0);
-  const [beijingTime, setBeijingTime] = useState("����ʱ��");
+  const [beijingTime, setBeijingTime] = useState("北京时间");
   const [stateLoaded, setStateLoaded] = useState(false);
   const [toast, setToast] = useState("");
   const [tagPreferences, setTagPreferences] = useState<TagPreferences>(() => normalizeTagPreferences(readClientCache<unknown>(TAG_PREFERENCES_KEY) || defaultTagPreferences()));
@@ -396,7 +397,7 @@ export default function Home() {
       if (avatarUrl) window.localStorage.setItem("yuexiaji:avatar", avatarUrl);
       else window.localStorage.removeItem("yuexiaji:avatar");
     } catch {
-      window.setTimeout(() => setToast("ͷ�񱣴�ʧ�ܣ�ͼƬ���ܹ���"), 0);
+      window.setTimeout(() => setToast("头像保存失败，图片可能过大"), 0);
     }
   }, [avatarUrl]);
 
@@ -517,7 +518,7 @@ export default function Home() {
         setAnime((items) => items.map((current) => current.id === item.id || current.id === queueId || current.id === saved.id ? saved : current));
       }
     }).catch((error) => {
-      setToast(error instanceof Error ? error.message : "ý�屣��ʧ��");
+      setToast(error instanceof Error ? error.message : "媒体保存失败");
     }).finally(() => {
       if (mediaSaveQueues.current.get(queueId) === task) mediaSaveQueues.current.delete(queueId);
     });
@@ -550,7 +551,7 @@ export default function Home() {
         fetchSubjectDetail<SearchResult & { summary?: string; overview?: string; score?: number }>(undefined, undefined, "game", { provider: "vndb", externalId: vndbId }).then((detail) => {
           if (active) setSearchResults([detailToSearchResult(detail)]);
         }).catch(() => {
-          if (active) { setSearchResults([]); setToast(`δ�ҵ� VNDB ��Ŀ ${vndbId}`); }
+          if (active) { setSearchResults([]); setToast(`未找到 VNDB 条目 ${vndbId}`); }
         }).finally(() => { if (active) setSearching(false); });
       }, 0);
       return () => { active = false; window.clearTimeout(timer); };
@@ -561,7 +562,7 @@ export default function Home() {
         fetchSubjectDetail<SearchResult & { summary?: string; overview?: string; score?: number }>(bangumiId, undefined, addForm.mediaType).then((detail) => {
           if (active) setSearchResults([detailToSearchResult(detail)]);
         }).catch(() => {
-          if (active) { setSearchResults([]); setToast(`δ�ҵ� Bangumi ��Ŀ #${bangumiId}`); }
+          if (active) { setSearchResults([]); setToast(`未找到 Bangumi 条目 #${bangumiId}`); }
         }).finally(() => { if (active) setSearching(false); });
       }, 0);
       return () => { active = false; window.clearTimeout(timer); };
@@ -703,14 +704,14 @@ export default function Home() {
       mediaSaveVersions.current.delete(queueId);
       return true;
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "ý��ɾ��ʧ��");
+      setToast(error instanceof Error ? error.message : "媒体删除失败");
       return false;
     }
   };
   const deleteSelectedAnime = async (ids: number[]) => {
     const uniqueIds = Array.from(new Set(ids)).filter((id) => anime.some((item) => item.id === id));
     if (!uniqueIds.length) return false;
-    if (!window.confirm(`ȷ��ɾ��ѡ�е� ${uniqueIds.length} ���ղ���ɾ�����޷��ָ���`)) return false;
+    if (!window.confirm(`确定删除选中的 ${uniqueIds.length} 个收藏吗？删除后无法恢复。`)) return false;
     const results = await Promise.allSettled(uniqueIds.map(async (id) => {
       const queueId = mediaLocalIds.current.get(id) || id;
       mediaSaveVersions.current.set(queueId, (mediaSaveVersions.current.get(queueId) || 0) + 1);
@@ -739,10 +740,10 @@ export default function Home() {
       setAnime((items) => items.filter((item) => !deleted.has(item.id)));
     }
     if (failed) {
-      setToast(`${succeeded.length} ����ɾ����${failed} ��ɾ��ʧ��`);
+      setToast(`${succeeded.length} 项已删除，${failed} 项删除失败`);
       return false;
     }
-    setToast(`��ɾ�� ${succeeded.length} ���ղ�`);
+    setToast(`已删除 ${succeeded.length} 项收藏`);
     return true;
   };
   const openCalendar = (day: CalendarDay = "all") => {
@@ -769,7 +770,7 @@ export default function Home() {
     const current = anime.find((item) => item.id === id);
     if (current) void persistAnime({ ...current, score, updatedAt: Date.now() });
     setAnime((items) => items.map((item) => item.id === id ? { ...item, score, updatedAt: Date.now() } : item));
-    setToast(`������ ${score} �� ${scoreLabels[score]}`);
+    setToast(`已评分 ${score} · ${scoreLabels[score]}`);
   };
 
   const adjust = (id: number, delta: number) => {
@@ -782,7 +783,7 @@ export default function Home() {
       setModal("complete");
       return;
     }
-    setToast(delta > 0 ? "�Ѽ�¼һ��" : "�ѳ���һ��");
+    setToast(delta > 0 ? "已记录一集" : "已撤销一集");
   };
   const completeAnime = () => {
     if (completionId === null) return;
@@ -790,7 +791,7 @@ export default function Home() {
     if (current) void persistAnime({ ...current, progress: current.total, status: "finished", updatedAt: Date.now() });
     setAnime((items) => items.map((item) => item.id === completionId ? { ...item, progress: item.total, status: "finished", updatedAt: Date.now() } : item));
     closeSecondary(() => setActiveStatus("finished"));
-    setToast("�ѱ��Ϊ�����");
+    setToast("已标记为已完成");
   };
   const chooseSearch = async (result: SearchResult) => {
     const mediaType = addForm.mediaType;
@@ -828,7 +829,7 @@ export default function Home() {
         metadata: normalizeMediaMetadata({ ...form.metadata, ...(detail.metadata || {}), sources: { ...(form.metadata.sources || {}), ...(detail.metadata?.sources || {}), ...(externalId ? { [provider]: externalId } : {}) }, overview: detail.overview || detail.summary || form.metadata.overview, overviewOverride: false, ...(isVndb ? { vndbId: detail.externalId || result.externalId || result.metadata?.vndbId, vndbUrl: result.externalId ? `https://vndb.org/${result.externalId}` : result.metadata?.vndbUrl, provider: "vndb" } : isTmdb ? { tmdbId: detail.tmdbId || selectedId, backdropImage: detail.backdropImage, originalTitle: detail.originalTitle || detail.jp, genres: detail.genres, provider: "tmdb" } : {}) }),
       } : form);
     } catch {
-      setToast(`${provider} �����ȡʧ�ܣ��ѱ����������`);
+      setToast(`${provider} 详情读取失败，已保留搜索结果`);
     }
   };
   const openDeviceEditor = (device: Device | null) => {
@@ -836,7 +837,7 @@ export default function Home() {
     setDeviceForm(device ? {
       name: device.name, category: device.category, subCategory: device.subCategory, status: device.status,
       price: device.price != null ? String(device.price) : "", purchaseDate: device.purchaseDate || "",
-      receiptImage: device.receiptImage, coverImage: device.coverImage, tags: device.tags.join("��"),
+      receiptImage: device.receiptImage, coverImage: device.coverImage, tags: device.tags.join("，"),
       coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom,
       rating: device.rating != null ? String(device.rating) : "", review: device.review,
     } : { name: "", category: deviceCategories[0]?.id || "audio", subCategory: "", status: "active", price: "", purchaseDate: "", receiptImage: "", coverImage: "", coverPositionX: 50, coverPositionY: 50, coverZoom: 100, tags: "", rating: "", review: "" });
@@ -848,7 +849,7 @@ export default function Home() {
   };
   const submitDevice = async () => {
     if (!deviceForm) return;
-    if (!deviceForm.name.trim()) { setToast("����д�豸����"); return; }
+    if (!deviceForm.name.trim()) { setToast("请填写设备名称"); return; }
     const device: Device = {
       id: deviceDraft?.id || Date.now(),
       name: deviceForm.name.trim(),
@@ -863,7 +864,7 @@ export default function Home() {
       coverPositionX: deviceForm.coverPositionX,
       coverPositionY: deviceForm.coverPositionY,
       coverZoom: deviceForm.coverZoom,
-      tags: deviceForm.tags.split(/[,����\s]+/).map((tag) => tag.trim()).filter(Boolean).slice(0, 12),
+      tags: deviceForm.tags.split(/[,，、\s]+/).map((tag) => tag.trim()).filter(Boolean).slice(0, 12),
       rating: deviceForm.rating !== "" && Number.isInteger(Number(deviceForm.rating)) ? Math.min(10, Math.max(1, Number(deviceForm.rating))) : null,
       review: deviceForm.review.trim(),
       updatedAt: Date.now(),
@@ -872,19 +873,19 @@ export default function Home() {
     const localId = device.id;
     setDevices((items) => isNew ? [device, ...items] : items.map((item) => item.id === localId ? device : item));
     closeSecondary();
-    setToast(isNew ? "�豸�Ѽ����Ʒ��" : "�豸��Ϣ�Ѹ���");
+    setToast(isNew ? "设备已加入藏品库" : "设备信息已更新");
     if (!devicesPersistable) return;
     try {
       const payload = await saveDevice({ id: deviceDraft?.id, name: device.name, category: device.category, subCategory: device.subCategory, status: device.status, price: device.price, currency: device.currency, purchaseDate: device.purchaseDate, receiptImage: device.receiptImage, coverImage: device.coverImage, coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom, tags: device.tags, rating: device.rating, review: device.review });
       if (payload?.device) setDevices((items) => items.map((item) => item.id === localId ? normalizeLibraryDevice(payload.device) : item));
     } catch {
       setDevicesPersistable(false);
-      setToast("�ƶ��ݲ����ã��豸�ѱ����ڱ�ҳ");
+      setToast("云端暂不可用，设备已保存在本页");
     }
   };
   const deleteDevice = async (id: number) => {
     setDevices((items) => items.filter((item) => item.id !== id));
-    setToast("�豸���Ƴ���Ʒ��");
+    setToast("设备已移出藏品库");
     if (!devicesPersistable) return;
     try {
       await removeDevice(id);
@@ -895,7 +896,7 @@ export default function Home() {
   const openReceipt = (device: Device) => { setReceiptPreview(device); setModal("receipt"); };
   const triggerSearch = () => {
     const isDirectId = !["movie", "tv"].includes(addForm.mediaType) && Boolean(parseBangumiSubjectId(query) || (addForm.mediaType === "game" && parseVndbId(query)));
-    if (query.trim().length < 2 && !isDirectId) { setToast("������ Bangumi/VNDB ID ������������������"); return; }
+    if (query.trim().length < 2 && !isDirectId) { setToast("请输入 Bangumi/VNDB ID 或至少两个字再搜索"); return; }
     setSearchVersion((version) => version + 1);
   };
   const uploadImageAsset = async (file?: File): Promise<string | null> => {
@@ -903,10 +904,10 @@ export default function Home() {
     setThumbnailUploading(true);
     try {
       const payload = await uploadMediaImage(file);
-      setToast("ͼƬ��ѹ�����ϴ�");
+      setToast("图片已压缩并上传");
       return payload.url;
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "����ͼ�ϴ�ʧ��");
+      setToast(error instanceof Error ? error.message : "缩略图上传失败");
       return null;
     } finally {
       setThumbnailUploading(false);
@@ -917,7 +918,7 @@ export default function Home() {
   const openVideoSubtypeManager = (returnTo: "add" | "library" = "library") => { setVideoSubtypeReturn(returnTo); setModal("video_subtypes"); };
   const closeVideoSubtypeManager = () => { const returnTo = videoSubtypeReturn; setVideoSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); };
   const addAnime = () => {
-    if (!addForm.title.trim()) return setToast("����д�ղ�����");
+    if (!addForm.title.trim()) return setToast("请填写收藏名称");
     const setting = mediaSettings[addForm.mediaType];
     const isMusic = addForm.mediaType === "music";
     const isVisual = addForm.mediaType === "visual";
@@ -926,21 +927,21 @@ export default function Home() {
     const galleryImages = isVisual ? normalizeMediaImages(addForm.images, addForm.thumbnail.trim()) : [];
     const galleryCover = mediaImageUrl(galleryImages.find((image) => image.isCover) || galleryImages[0]);
     const metadata = normalizeMediaMetadata({ ...addForm.metadata, ...(addForm.mediaType === "light_novel" && !addForm.metadata.bookKind ? { bookKind: "light_novel" } : {}), videoSource: isVideo ? addForm.source.trim() : addForm.metadata.videoSource });
-    const personalTags = splitTags([addForm.tags, addForm.characterTags].filter(Boolean).join("��"));
-    const newItem: Anime = { id: Date.now(), title: addForm.title.trim(), jp: addForm.jp || "", note: addForm.note || "�ֶ��������¼�", progress: 0, total: isMusic || isVisual || isMovie || isVideo ? 1 : addForm.total || (addForm.mediaType === "game" ? 100 : 12), status: addForm.status, kind: "coral", score: undefined, image: isVisual ? undefined : addForm.image.trim() || (addForm.mediaType === "anime" && addForm.subjectId ? highResCoverUrl(addForm.jp || addForm.title) : ""), thumbnail: isVisual ? galleryCover : isVideo ? addForm.thumbnail.trim() : undefined, images: isVisual ? galleryImages : undefined, subjectId: isVisual || addForm.mediaType === "tv" || isMovie || isVideo ? undefined : addForm.subjectId, mediaType: addForm.mediaType, unit: setting.unit, globalScore: addForm.globalScore, source: isVideo ? "manual" : normalizeMediaSource(addForm.source, addForm.subjectId ? "bangumi" : "manual"), collection: addForm.collection || "", tags: personalTags, musicAlbum: isMusic ? addForm.musicAlbum.trim() : "", musicArtist: isMusic ? addForm.musicArtist.trim() : "", lyricist: isMusic ? addForm.lyricist.trim() : "", composer: isMusic ? addForm.composer.trim() : "", animeSong: isMusic && addForm.animeSong, visualSubtype: isVisual ? addForm.visualSubtype : "other", videoSubtype: isVideo ? normalizeVideoSubtype(addForm.videoSubtype) : "other", sourceUrl: isVisual || isVideo ? addForm.sourceUrl.trim() : "", pixivPid: isVisual ? addForm.pixivPid.trim() : "", author: isVisual ? addForm.author.trim() : "", twitterSource: isVisual ? addForm.twitterSource.trim() : "", characterTags: [], metadata, updatedAt: Date.now() };
+    const personalTags = splitTags([addForm.tags, addForm.characterTags].filter(Boolean).join("，"));
+    const newItem: Anime = { id: Date.now(), title: addForm.title.trim(), jp: addForm.jp || "", note: addForm.note || "手动加入月下集", progress: 0, total: isMusic || isVisual || isMovie || isVideo ? 1 : addForm.total || (addForm.mediaType === "game" ? 100 : 12), status: addForm.status, kind: "coral", score: undefined, image: isVisual ? undefined : addForm.image.trim() || (addForm.mediaType === "anime" && addForm.subjectId ? highResCoverUrl(addForm.jp || addForm.title) : ""), thumbnail: isVisual ? galleryCover : isVideo ? addForm.thumbnail.trim() : undefined, images: isVisual ? galleryImages : undefined, subjectId: isVisual || addForm.mediaType === "tv" || isMovie || isVideo ? undefined : addForm.subjectId, mediaType: addForm.mediaType, unit: setting.unit, globalScore: addForm.globalScore, source: isVideo ? "manual" : normalizeMediaSource(addForm.source, addForm.subjectId ? "bangumi" : "manual"), collection: addForm.collection || "", tags: personalTags, musicAlbum: isMusic ? addForm.musicAlbum.trim() : "", musicArtist: isMusic ? addForm.musicArtist.trim() : "", lyricist: isMusic ? addForm.lyricist.trim() : "", composer: isMusic ? addForm.composer.trim() : "", animeSong: isMusic && addForm.animeSong, visualSubtype: isVisual ? addForm.visualSubtype : "other", videoSubtype: isVideo ? normalizeVideoSubtype(addForm.videoSubtype) : "other", sourceUrl: isVisual || isVideo ? addForm.sourceUrl.trim() : "", pixivPid: isVisual ? addForm.pixivPid.trim() : "", author: isVisual ? addForm.author.trim() : "", twitterSource: isVisual ? addForm.twitterSource.trim() : "", characterTags: [], metadata, updatedAt: Date.now() };
     setAnime((items) => [...items, newItem]);
     void persistAnime(newItem);
-    closeSecondary(); setAddForm({ title: "", jp: "", total: 12, status: "watching", note: "", image: "", thumbnail: "", images: [], mediaType: "anime", collection: "", tags: "", musicAlbum: "", musicArtist: "", lyricist: "", composer: "", source: "", animeSong: false, visualSubtype: "other", videoSubtype: "other", sourceUrl: "", pixivPid: "", author: "", twitterSource: "", characterTags: "", metadata: normalizeMediaMetadata() }); setQuery(""); setToast(isMusic ? "�����Ѽ������¼�" : isVisual ? "�Ӿ��ղ��Ѽ��뻭��" : isVideo ? "��Ƶ�Ѽ������¼�" : "�Ѽ������¼�");
+    closeSecondary(); setAddForm({ title: "", jp: "", total: 12, status: "watching", note: "", image: "", thumbnail: "", images: [], mediaType: "anime", collection: "", tags: "", musicAlbum: "", musicArtist: "", lyricist: "", composer: "", source: "", animeSong: false, visualSubtype: "other", videoSubtype: "other", sourceUrl: "", pixivPid: "", author: "", twitterSource: "", characterTags: "", metadata: normalizeMediaMetadata() }); setQuery(""); setToast(isMusic ? "单曲已加入月下集" : isVisual ? "视觉收藏已加入画廊" : isVideo ? "视频已加入月下集" : "已加入月下集");
   };
   const createCollection = () => {
     const name = collectionName.trim();
-    if (!name) { setToast("������ϼ�����"); return; }
-    if (collections.includes(name)) { setToast("����ϼ��Ѿ�����"); return; }
+    if (!name) { setToast("请输入合集名称"); return; }
+    if (collections.includes(name)) { setToast("这个合集已经存在"); return; }
     setCollections((items) => [...items, name]);
     setActiveCollection(name);
     setCollectionName("");
     closeSecondary();
-    setToast(`�Ѵ����ϼ���${name}��`);
+    setToast(`已创建合集「${name}」`);
   };
   const selectCollection = (name: string) => setActiveCollection(name);
   const toggleCalendarTracking = (entry: CalendarEntry) => {
@@ -950,7 +951,7 @@ export default function Home() {
       void removePersistedAnime(existing.id).then((removed) => {
         if (!removed) setAnime((items) => items.some((item) => item.id === existing.id) ? items : [...items, existing]);
       });
-      setToast("��ȡ��׷��");
+      setToast("已取消追更");
       return;
     }
     const providers = calendarSourceTokens(entry.source);
@@ -959,17 +960,17 @@ export default function Home() {
     const primaryProvider = providers[0] || "manual";
     const source = primaryProvider === "bangumi" || primaryProvider === "anilist" || primaryProvider === "animeschedule" ? primaryProvider : "manual";
     const newItem: Anime = {
-      id: Date.now(), title: entry.title, jp: entry.jp, subjectId: source === "bangumi" ? entry.subjectId : undefined, note: `������${entry.day}���ͱ�����`, progress: 0, total: 12,
-      status: "watching", kind: "coral", image: entry.coverUrl || highResCoverUrl(entry.coverQuery), next: entry.meta.split("��").slice(0, 2).join("��"), mediaType: "anime", unit: "��", source, collection: "", tags: ["����׷��"], metadata: normalizeMediaMetadata({ sources: sourceIds }), updatedAt: Date.now(),
+      id: Date.now(), title: entry.title, jp: entry.jp, subjectId: source === "bangumi" ? entry.subjectId : undefined, note: `从星期${entry.day}放送表加入`, progress: 0, total: 12,
+      status: "watching", kind: "coral", image: entry.coverUrl || highResCoverUrl(entry.coverQuery), next: entry.meta.split("·").slice(0, 2).join("·"), mediaType: "anime", unit: "集", source, collection: "", tags: ["放送追更"], metadata: normalizeMediaMetadata({ sources: sourceIds }), updatedAt: Date.now(),
     };
     setAnime((items) => [...items, newItem]);
     void persistAnime(newItem);
-    setToast("�Ѽ���׷�������浽�ϼ�");
+    setToast("已加入追番并保存到合集");
   };
   const saveDetails = (updated: Anime) => {
     setAnime((items) => items.map((item) => item.id === updated.id ? updated : item));
     void persistAnime(updated);
-    closeSecondary(); setToast("�޸��ѱ���");
+    closeSecondary(); setToast("修改已保存");
   };
   const removeAnime = (id: number) => {
     const removed = anime.find((item) => item.id === id);
@@ -977,35 +978,35 @@ export default function Home() {
     void removePersistedAnime(id).then((deleted) => {
       if (!deleted && removed) setAnime((items) => items.some((item) => item.id === id) ? items : [...items, removed]);
     });
-    closeSecondary(); setToast("��Ŀ���Ƴ�");
+    closeSecondary(); setToast("条目已移除");
   };
   const uploadBackground = async (file?: File) => {
     if (!file) return;
     try {
       const payload = await uploadCustomBackground(file);
-      setBackgroundVersion(payload.version); setToast("�����ѱ���");
+      setBackgroundVersion(payload.version); setToast("背景已保存");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "�ϴ�ʧ��");
+      setToast(error instanceof Error ? error.message : "上传失败");
     }
   };
   const chooseAvatar = async (file?: File) => {
     if (!file) return;
-    if (!file.type.startsWith("image/")) { setToast("��ѡ��ͼƬ�ļ�"); return; }
-    if (file.size > 2 * 1024 * 1024) { setToast("ͷ��ͼƬ���ܳ��� 2 MB"); return; }
+    if (!file.type.startsWith("image/")) { setToast("请选择图片文件"); return; }
+    if (file.size > 2 * 1024 * 1024) { setToast("头像图片不能超过 2 MB"); return; }
     try {
       const payload = await uploadAvatar(file);
       setAvatarUrl(payload.url);
-      setToast("ͷ���Ѹ��²�����");
+      setToast("头像已更新并保存");
       return;
     } catch {
-      // δ��¼�򱾵ؿ��������޷�ʹ�ö���洢ʱ���������������ͷ��
+      // 未登录或本地开发环境无法使用对象存储时，保留浏览器本地头像。
     }
     const reader = new FileReader();
-    reader.onload = () => { if (typeof reader.result === "string") { setAvatarUrl(reader.result); setToast("ͷ���Ѹ���"); } };
-    reader.onerror = () => setToast("ͷ���ȡʧ��");
+    reader.onload = () => { if (typeof reader.result === "string") { setAvatarUrl(reader.result); setToast("头像已更新"); } };
+    reader.onerror = () => setToast("头像读取失败");
     reader.readAsDataURL(file);
   };
-  const resetAvatar = () => { setAvatarUrl(""); setToast("�ѻָ�Ĭ��ͷ��"); };
+  const resetAvatar = () => { setAvatarUrl(""); setToast("已恢复默认头像"); };
   const refreshBangumi = async () => {
     const result = await refreshBangumiRecords(anime, bangumiSyncTypes, undefined, syncSettings);
     setAnime(result.anime);
@@ -1029,24 +1030,24 @@ export default function Home() {
       body: JSON.stringify({ direction, types }),
     });
     const payload = await response.json().catch(() => ({})) as { error?: string; details?: string; synced?: number; failed?: number; errors?: Array<{ error?: string }> };
-    if (!response.ok) throw new Error([payload.error || "Bangumi �˺�ͬ��ʧ��", payload.details].filter(Boolean).join("��"));
+    if (!response.ok) throw new Error([payload.error || "Bangumi 账号同步失败", payload.details].filter(Boolean).join("："));
     if (direction === "pull") await reloadMediaLibrary();
     return { synced: Number(payload.synced) || 0, failed: Number(payload.failed) || 0, failureReason: payload.errors?.[0]?.error || "" };
   };
   const runSync = async (target: SyncTarget) => {
     if (syncing) return;
-    if (target === "bangumi_push" && !window.confirm("�����¼����� Bangumi ��������Ŀ״̬�����֡���ǩ����ע�Ͷ�������д�� Bangumi��ȷ�ϼ�����")) return;
+    if (target === "bangumi_push" && !window.confirm("将月下集中由 Bangumi 管理的条目状态、评分、标签、备注和动画进度写入 Bangumi。确认继续？")) return;
     setSyncing(target);
     try {
       if (target === "bangumi") {
-        setToast(`Bangumi ��ˢ�� ${await refreshBangumi()} ��`);
+        setToast(`Bangumi 已刷新 ${await refreshBangumi()} 部`);
       } else {
         const direction = target === "bangumi_pull" ? "pull" : "push";
         const result = await syncBangumiAccount(direction, bangumiSyncTypes);
-        setToast(`${direction === "pull" ? "Bangumi ����" : "Bangumi д��"}��ɣ��ɹ� ${result.synced} ��${result.failed ? `��ʧ�� ${result.failed} ��${result.failureReason ? `��${result.failureReason}��` : ""}` : ""}`);
+        setToast(`${direction === "pull" ? "Bangumi 导入" : "Bangumi 写回"}完成：成功 ${result.synced} 条${result.failed ? `，失败 ${result.failed} 条${result.failureReason ? `（${result.failureReason}）` : ""}` : ""}`);
       }
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "ͬ��ʧ�ܣ����Ժ�����");
+      setToast(error instanceof Error ? error.message : "同步失败，请稍后重试");
     } finally {
       setSyncing(null);
       setSyncDialogTarget(null);
@@ -1055,15 +1056,15 @@ export default function Home() {
   const openSyncDialog = (target: SyncTarget) => { setModal(null); setSyncDialogTarget(target); };
 
   return <main className={`app-shell font-${font} ${yuehua ? "theme-yuehua" : ""} ${closingModal ? "secondary-closing" : ""}`} style={{ "--softness": softness / 100, "--primary": primaryColor, "--accent": accentColor } as React.CSSProperties}>
-    <button type="button" className="appearance-switch" onClick={toggleYuehua} aria-pressed={yuehua} title={yuehua ? "�л����������" : "Ԥ���»�Һ̬�������"}><span aria-hidden="true">?</span>{yuehua ? "�»� �� �ѿ���" : "�»� �� Ԥ��"}</button>
+    <button type="button" className="appearance-switch" onClick={toggleYuehua} aria-pressed={yuehua} title={yuehua ? "切换至经典外观" : "预览月华液态玻璃外观"}><span aria-hidden="true">☾</span>{yuehua ? "月华 · 已开启" : "月华 · 预览"}</button>
     {backgroundVersion > 0 && <div className="custom-background" style={{ backgroundImage: `url("${customBackgroundUrl(backgroundVersion)}")` }} />}
     <header className="topbar"><div className="topbar-inner">
-      <button className="brand" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setIncludeStandaloneMedia(false); setActiveCollection("all"); setActiveTags([]); }}><i />���¼�</button>
-      <nav className="desktop-nav" aria-label="һ������"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>��Ʒ��</button></nav>
-      <label className="library-search"><span>?</span><input value={listQuery} onChange={(event) => setListQuery(event.target.value)} placeholder={activeView === "devices" ? "�����豸����ǩ������" : "�����ҵ��ղ�"} /></label>
-      <div className="header-actions"><button className="icon-button health-dot" onClick={() => setModal("connectivity")} aria-label="��ͨ�Լ��"><i /></button><button className={`quiet-button sync-trigger ${modal === "sync" ? "open" : ""}`} onClick={() => modal === "sync" ? closeSecondary() : setModal("sync")} aria-expanded={modal === "sync"}><span className="button-label">ͬ��</span><i className="sync-chevron" aria-hidden="true" /></button><button className="primary-button add-trigger" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><span className="plus-icon" aria-hidden="true">��</span><span className="button-label">����</span></button><button className="avatar" onClick={() => setModal("settings")} aria-label="��ƫ������">{avatarUrl ? <img src={avatarUrl} alt="�Զ���ͷ��" /> : "��"}</button>{modal === "sync" && <><button className="popover-dismiss" onClick={() => closeSecondary()} aria-label="�ر�ͬ���˵�" /><SyncMenu close={() => closeSecondary()} syncing={syncing} open={openSyncDialog} /></>}</div>
+      <button className="brand" onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); setIncludeStandaloneMedia(false); setActiveCollection("all"); setActiveTags([]); }}><i />月下集</button>
+      <nav className="desktop-nav" aria-label="一级导航"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>藏品库</button></nav>
+      <label className="library-search"><span>⌕</span><input value={listQuery} onChange={(event) => setListQuery(event.target.value)} placeholder={activeView === "devices" ? "搜索设备、标签或子类" : "搜索我的收藏"} /></label>
+      <div className="header-actions"><button className="icon-button health-dot" onClick={() => setModal("connectivity")} aria-label="连通性检查"><i /></button><button className={`quiet-button sync-trigger ${modal === "sync" ? "open" : ""}`} onClick={() => modal === "sync" ? closeSecondary() : setModal("sync")} aria-expanded={modal === "sync"}><span className="button-label">同步</span><i className="sync-chevron" aria-hidden="true" /></button><button className="primary-button add-trigger" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><span className="plus-icon" aria-hidden="true">＋</span><span className="button-label">添加</span></button><button className="avatar" onClick={() => setModal("settings")} aria-label="打开偏好设置">{avatarUrl ? <img src={avatarUrl} alt="自定义头像" /> : "泽"}</button>{modal === "sync" && <><button className="popover-dismiss" onClick={() => closeSecondary()} aria-label="关闭同步菜单" /><SyncMenu close={() => closeSecondary()} syncing={syncing} open={openSyncDialog} /></>}</div>
     </div></header>
-    <nav className="mobile-view-tabs" aria-label="һ������"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>��Ʒ��</button></nav>
+    <nav className="mobile-view-tabs" aria-label="一级导航"><button className={activeView === "acg" ? "active" : ""} onClick={() => setActiveView("acg")}>ACGNM</button><button className={activeView === "devices" ? "active" : ""} onClick={() => setActiveView("devices")}>藏品库</button></nav>
 
     <div className="page-wrap">
         <CollectionSummary beijingTime={beijingTime} activeCollectionTotal={activeCollectionTotal} activeMediaCounts={activeMediaCounts} activeDeviceCount={activeDeviceCount} totalInvestment={totalInvestment} musicTotal={musicTotal} />
@@ -1080,10 +1081,10 @@ export default function Home() {
       />}
     </div>
 
-    <nav className="mobile-nav"><button className={activeView === "acg" ? "active" : ""} onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); }}><i>��</i><span>��ҳ</span></button><button onClick={() => openCalendar()}><i>?</i><span>����</span></button><button className="mobile-nav-add" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><i>��</i><span>����</span></button><button onClick={() => setModal("sync")}><i>?</i><span>ͬ��</span></button><button onClick={() => setModal("settings")}><i>��</i><span>�ҵ�</span></button></nav>
+    <nav className="mobile-nav"><button className={activeView === "acg" ? "active" : ""} onClick={() => { setActiveView("acg"); setActiveStatus("watching"); setActiveMedia("all"); }}><i>◇</i><span>首页</span></button><button onClick={() => openCalendar()}><i>◷</i><span>日历</span></button><button className="mobile-nav-add" onClick={() => activeView === "devices" ? openDeviceEditor(null) : setModal("add")}><i>＋</i><span>添加</span></button><button onClick={() => setModal("sync")}><i>↻</i><span>同步</span></button><button onClick={() => setModal("settings")}><i>○</i><span>我的</span></button></nav>
     {modal === "add" && <AddModal query={query} setQuery={(value) => { setQuery(value); if (value.trim().length < 2) { setSearchResults([]); setSearching(false); } }} search={triggerSearch} searching={searching} results={searchResults} choose={chooseSearch} form={addForm} setForm={setAddForm} collections={collections} close={() => closeSecondary()} submit={addAnime} uploadImage={uploadImageAsset} thumbnailUploading={thumbnailUploading} visualSubtypeLabels={visualSubtypeLabels} openVisualSubtypeManager={(returnTo) => openVisualSubtypeManager(returnTo || "add")} videoSubtypeLabels={videoSubtypeLabels} openVideoSubtypeManager={(returnTo) => openVideoSubtypeManager(returnTo || "add")} />}
     {modal === "collection" && <CollectionModal name={collectionName} setName={setCollectionName} close={() => closeSecondary()} submit={createCollection} />}
-    {modal === "collection_manager" && <CollectionManagerModal collections={collections} close={() => closeSecondary()} save={(next) => { const removed = new Set(collections.filter((name) => !next.includes(name))); setCollections(next); if (removed.size) { const affected = anime.filter((item) => item.collection && removed.has(item.collection)); setAnime((items) => items.map((item) => item.collection && removed.has(item.collection) ? { ...item, collection: "", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, collection: "", updatedAt: Date.now() }); }); } if (activeCollection !== "all" && !next.includes(activeCollection)) setActiveCollection("all"); closeSecondary(); setToast("�ϼ�˳���ѱ���"); }} />}
+    {modal === "collection_manager" && <CollectionManagerModal collections={collections} close={() => closeSecondary()} save={(next) => { const removed = new Set(collections.filter((name) => !next.includes(name))); setCollections(next); if (removed.size) { const affected = anime.filter((item) => item.collection && removed.has(item.collection)); setAnime((items) => items.map((item) => item.collection && removed.has(item.collection) ? { ...item, collection: "", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, collection: "", updatedAt: Date.now() }); }); } if (activeCollection !== "all" && !next.includes(activeCollection)) setActiveCollection("all"); closeSecondary(); setToast("合集顺序已保存"); }} />}
     {modal === "settings" && <SettingsModal
       font={font} setFont={setFont}
       avatarUrl={avatarUrl} chooseAvatar={chooseAvatar} resetAvatar={resetAvatar}
@@ -1101,10 +1102,10 @@ export default function Home() {
     {modal === "calendar" && <CalendarModal initialDay={calendarDay} close={() => closeSecondary()} titleMode={titleMode} anime={anime} airingSchedules={airingSchedules} toggle={toggleCalendarTracking} refreshSchedules={refreshAiringSchedules} />}
     {modal === "complete" && completionId !== null && <CompletionModal item={anime.find((item) => item.id === completionId)} close={() => closeSecondary()} confirm={completeAnime} />}
     {modal === "detail" && detailId !== null && anime.find((item) => item.id === detailId) && <DetailDrawer key={detailId} item={anime.find((item) => item.id === detailId)!} collections={collections} close={() => closeSecondary()} save={saveDetails} remove={removeAnime} uploadImage={uploadImageAsset} imageUploading={thumbnailUploading} visualSubtypeLabels={visualSubtypeLabels} videoSubtypeLabels={videoSubtypeLabels} syncSettings={syncSettings} />}
-    {modal === "visual_subtypes" && <VisualSubtypeModal labels={visualSubtypeLabels} close={closeVisualSubtypeManager} save={(labels) => { const returnTo = visualSubtypeReturn; const nextLabels = normalizeVisualSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVisualSubtypeLabels(nextLabels); setVisualSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype)); setAnime((items) => items.map((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype) ? { ...item, visualSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, visualSubtype: "other", updatedAt: Date.now() }); }); setVisualSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("�����������ѱ���"); }} />}
-    {modal === "video_subtypes" && <VideoSubtypeModal labels={videoSubtypeLabels} close={closeVideoSubtypeManager} save={(labels) => { const returnTo = videoSubtypeReturn; const nextLabels = normalizeVideoSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVideoSubtypeLabels(nextLabels); setVideoSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype)); setAnime((items) => items.map((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype) ? { ...item, videoSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, videoSubtype: "other", updatedAt: Date.now() }); }); setVideoSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("��Ƶ�ӷ����ѱ���"); }} />}
+    {modal === "visual_subtypes" && <VisualSubtypeModal labels={visualSubtypeLabels} close={closeVisualSubtypeManager} save={(labels) => { const returnTo = visualSubtypeReturn; const nextLabels = normalizeVisualSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVisualSubtypeLabels(nextLabels); setVisualSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype)); setAnime((items) => items.map((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype) ? { ...item, visualSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, visualSubtype: "other", updatedAt: Date.now() }); }); setVisualSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("画廊子类型已保存"); }} />}
+    {modal === "video_subtypes" && <VideoSubtypeModal labels={videoSubtypeLabels} close={closeVideoSubtypeManager} save={(labels) => { const returnTo = videoSubtypeReturn; const nextLabels = normalizeVideoSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVideoSubtypeLabels(nextLabels); setVideoSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype)); setAnime((items) => items.map((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype) ? { ...item, videoSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { void persistAnime({ ...item, videoSubtype: "other", updatedAt: Date.now() }); }); setVideoSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("视频子分类已保存"); }} />}
     {modal === "device" && deviceForm && <DeviceModal form={deviceForm} setForm={setDeviceForm} device={deviceDraft} categories={deviceCategories} subCategories={deviceSubCategories} close={() => closeSecondary()} submit={() => void submitDevice()} />}
-    {modal === "device_categories" && <DeviceSubCategoryModal value={deviceSubCategories} categoryLabels={deviceCategoryLabels} initialCategory={deviceCategoryManagerTab} close={() => closeSecondary()} toast={setToast} save={(value, labels) => { const nextLabels = normalizeDeviceCategoryLabels(labels); const nextCategories = deviceCategoriesForPreferences(nextLabels, value); setDeviceSubCategories(value); setDeviceCategoryLabels(nextLabels); if (deviceCategoryTab !== "all" && !nextCategories.some((category) => category.id === deviceCategoryTab)) setDeviceCategoryTab("all"); if (deviceCategoryManagerTab && !nextCategories.some((category) => category.id === deviceCategoryManagerTab)) setDeviceCategoryManagerTab(nextCategories[0]?.id || "audio"); if (deviceSubCategory !== "all" && !Object.values(value).flat().includes(deviceSubCategory)) setDeviceSubCategory("all"); closeSecondary(); setToast("�豸��������������˳���ѱ���"); }} />}
+    {modal === "device_categories" && <DeviceSubCategoryModal value={deviceSubCategories} categoryLabels={deviceCategoryLabels} initialCategory={deviceCategoryManagerTab} close={() => closeSecondary()} toast={setToast} save={(value, labels) => { const nextLabels = normalizeDeviceCategoryLabels(labels); const nextCategories = deviceCategoriesForPreferences(nextLabels, value); setDeviceSubCategories(value); setDeviceCategoryLabels(nextLabels); if (deviceCategoryTab !== "all" && !nextCategories.some((category) => category.id === deviceCategoryTab)) setDeviceCategoryTab("all"); if (deviceCategoryManagerTab && !nextCategories.some((category) => category.id === deviceCategoryManagerTab)) setDeviceCategoryManagerTab(nextCategories[0]?.id || "audio"); if (deviceSubCategory !== "all" && !Object.values(value).flat().includes(deviceSubCategory)) setDeviceSubCategory("all"); closeSecondary(); setToast("设备分类名称与子类顺序已保存"); }} />}
     {modal === "receipt" && receiptPreview && <ReceiptModal device={receiptPreview} close={() => closeSecondary()} />}
     {toast && <div className="toast" role="status">{toast}</div>}
   </main>;
