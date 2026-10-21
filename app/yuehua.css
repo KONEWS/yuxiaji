@@ -87,3 +87,32 @@
 @media (prefers-reduced-transparency: reduce) {
   .theme-yuehua .yuehua-sliding::before { background: #f3f0f8; }
 }
+
+/* Keep weekday labels readable on the pale sliding glass highlight. */
+.theme-yuehua .week-strip {
+  gap: 4px; padding: 4px; border: 0; border-radius: 20px; background: #e8e8f380;
+}
+.theme-yuehua .week-strip button {
+  border: 0; background: transparent; color: var(--muted);
+}
+.theme-yuehua .week-strip button.active {
+  background: linear-gradient(135deg, #e7dff3, #f0ebf7);
+  color: #42364f; font-weight: 800;
+  box-shadow: inset 0 1px #fff, inset 0 0 0 1px #bfb2d1, 0 3px 9px #57527815;
+}
+.theme-yuehua .week-strip button.active small { color: #625771; }
+.theme-yuehua .week-strip.yuehua-sliding::before {
+  background: linear-gradient(135deg, #e7dff3, #f0ebf7);
+  box-shadow: inset 0 1px #fff, inset 0 0 0 1px #bfb2d1, 0 3px 9px #57527815;
+}
+.theme-yuehua .week-strip.yuehua-sliding > button.active {
+  background: transparent; box-shadow: none;
+}
+@media (forced-colors: active) {
+  .theme-yuehua .week-strip button.active,
+  .theme-yuehua .week-strip.yuehua-sliding > button.active,
+  .theme-yuehua .week-strip.yuehua-sliding::before {
+    background: Highlight; color: HighlightText;
+  }
+  .theme-yuehua .week-strip button.active small { color: HighlightText; }
+}
