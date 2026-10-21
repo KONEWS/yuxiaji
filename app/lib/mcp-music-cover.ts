@@ -49,7 +49,8 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
     const input = await downloadCoverImage(fileUrl, body.file.mime_type);
     const output = processImage ? await processImage(input.bytes) : await transformCoverImage(input.bytes, images!);
     const imageHash = await hash(input.bytes);
-    await env.BUCKET.put(objectKey, output as Uint8Array<ArrayBuffer>, { httpMetadata: { contentType: "image/webp" } });
+    const payloadBytes = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer;
+    await env.BUCKET.put(objectKey, payloadBytes, { httpMetadata: { contentType: "image/webp" } });
     stored = true;
     let metadata: Record<string, unknown>;
     try { metadata = JSON.parse(existing.metadata); } catch { metadata = {}; }
@@ -63,7 +64,17 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
     return agentJson(payload);
   } catch {
     // Never persist or return signed file URLs, underlying fetch errors or tokens.
-    if (stored && !attached) await env.BUCKET.delete(objectKey).catch(() => undefined);
+    if (stored && !attached) {
+      // A D1 response can fail after committing. Keep an asset if the update's
+      // outcome is uncertain, rather than deleting a possibly attached cover.
+      try {
+        const references = await db.select({ id: userSubjects.id }).from(userSubjects).where(and(
+          eq(userSubjects.userKey, identity.userKey), eq(userSubjects.image, image),
+        )).limit(1);
+        const bucket = env.BUCKET as unknown as { delete(key: string): Promise<void> };
+        if (!references.length) await bucket.delete(objectKey);
+      } catch { /* Preserve the object when reference status is uncertain. */ }
+    }
     const payload = { error: "封面上传未完成，请读取条目核对；文件链接失效时重新附图并使用新的上传键", uploadFingerprint: fingerprint };
     await finishAgentOperation(reservation.id, 502, payload).catch(() => undefined);
     return agentJson(payload, 502);
