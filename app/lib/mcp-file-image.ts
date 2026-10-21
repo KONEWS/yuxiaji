@@ -14,7 +14,7 @@ export function chatGPTFileUrl(value: unknown) {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error("文件引用无效"); }
   if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash ||
-    !(url.hostname === "files.oaiusercontent.com" || url.hostname.endsWith(".files.oaiusercontent.com"))) {
+    !url.hostname.endsWith(".oaiusercontent.com")) {
     throw new Error("只接受 ChatGPT 提供的文件下载地址，请重新附上图片");
   }
   return url;

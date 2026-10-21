@@ -6,8 +6,9 @@ const png = new Uint8Array(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1
 const webp = new Uint8Array([0x52,0x49,0x46,0x46,12,0,0,0,0x57,0x45,0x42,0x50,0x56,0x50,0x38,0x20]);
 
 test("ChatGPT file allowlist rejects alternate schemes, embedded credentials, lookalikes and private hosts", () => {
-  for (const value of ["file:///cover.png", "http://files.oaiusercontent.com/image", "https://127.0.0.1/image", "https://files.oaiusercontent.com.evil.invalid/image", "https://evilfiles.oaiusercontent.com/image", "https://files.oaiusercontent.com@evil.invalid/image", "https://files.oaiusercontent.com:8443/image", "https://files.oaiusercontent.com/image#fragment"]) assert.throws(() => chatGPTFileUrl(value));
+  for (const value of ["file:///cover.png", "http://files.oaiusercontent.com/image", "https://127.0.0.1/image", "https://files.oaiusercontent.com.evil.invalid/image", "https://eviloaiusercontent.com/image", "https://files.oaiusercontent.com@evil.invalid/image", "https://files.oaiusercontent.com:8443/image", "https://files.oaiusercontent.com/image#fragment"]) assert.throws(() => chatGPTFileUrl(value));
   assert.equal(chatGPTFileUrl("https://files.oaiusercontent.com/cover.png?temporary=secret").hostname, "files.oaiusercontent.com");
+  assert.equal(chatGPTFileUrl("https://sdmntprkoreacentral.oaiusercontent.com/files/fixture/raw?temporary=secret").hostname, "sdmntprkoreacentral.oaiusercontent.com");
 });
 
 test("image reader enforces declared and streamed byte limits, rejects empty responses", async () => {
