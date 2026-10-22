@@ -95,7 +95,9 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
     const message = error instanceof Error ? error.message : "";
     const upstreamStatus = error instanceof Error && "status" in error && typeof error.status === "number"
       && Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : undefined;
-    const reason = reasons[message] ?? (upstreamStatus ? "download_http_error" : "operation_failed");
+    const downloadReason = error instanceof Error && "reason" in error
+      && (error.reason === "download_network_error" || error.reason === "download_redirect_error") ? error.reason : undefined;
+    const reason = reasons[message] ?? downloadReason ?? (upstreamStatus ? "download_http_error" : "operation_failed");
     const payload = { error: "封面上传未完成，请读取条目核对", code: "music_cover_upload_failed",
       stage, reason, ...(upstreamStatus ? { upstreamStatus } : {}), uploadFingerprint: fingerprint };
     await finishAgentOperation(reservation.id, 502, payload).catch(() => undefined);
