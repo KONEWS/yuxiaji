@@ -17,6 +17,8 @@ test("image reader enforces declared and streamed byte limits, rejects empty res
   const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(101)); }, cancel() { cancelled = true; } });
   await assert.rejects(boundedImageBytes(new Response(stream), 100));
   assert.equal(cancelled, true);
+  await assert.rejects(boundedImageBytes(new Response("private signed URL", { status: 403 }), 100),
+    (error) => error.status === 403 && !error.message.includes("private"));
   await assert.rejects(boundedImageBytes(new Response(new Uint8Array()), 100));
   assert.deepEqual(await boundedImageBytes(new Response(png), 100), png);
 });

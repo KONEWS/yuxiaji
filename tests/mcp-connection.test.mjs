@@ -172,7 +172,12 @@ test("music cover upload stores a display image, preserves song fields, reads ba
 test("failed music cover downloads leave the existing cover untouched", async () => {
   const media = successful(await call("create_media", { type: "music", title: "Cover failure", image: "https://example.com/keep.webp", idempotencyKey: "cover-failure-create" })).media;
   for (const [index, path] of ["oversize.webp", "not-image.html"].entries()) {
-    toolDenied(await call("upload_music_cover", { id: media.id, expectedTitle: media.title, idempotencyKey: `cover-failure-${index}`, file: { file_id: `file-failure-${index}`, download_url: `https://files.oaiusercontent.com/${path}` } }));
+    const failed = await call("upload_music_cover", { id: media.id, expectedTitle: media.title, idempotencyKey: `cover-failure-${index}`, file: { file_id: `file-failure-${index}`, download_url: `https://files.oaiusercontent.com/${path}?temporary-secret=never-return` } });
+    toolDenied(failed);
+    assert.equal(failed.result.structuredContent.error.code, "music_cover_upload_failed");
+    assert.equal(failed.result.structuredContent.error.stage, "download");
+    assert.equal(failed.result.structuredContent.error.reason, index === 0 ? "image_too_large" : "invalid_image");
+    assert.ok(!JSON.stringify(failed).includes("temporary-secret"), "download URLs never enter tool failures");
     const saved = successful(await call("get_media", { id: media.id })).media;
     assert.equal(saved.image, media.image);
   }

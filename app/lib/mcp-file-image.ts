@@ -29,7 +29,11 @@ export function coverImageType(bytes: Uint8Array) {
 }
 
 export async function boundedImageBytes(response: Response, limit: number) {
-  if (!response.ok || !response.body) throw new Error("文件读取失败，请重新附上图片");
+  if (!response.ok || !response.body) {
+    const error = new Error("文件读取失败，请重新附上图片");
+    if (!response.ok) Object.assign(error, { status: response.status });
+    throw error;
+  }
   if (Number(response.headers.get("content-length")) > limit) {
     await response.body.cancel();
     throw new Error("图片超过大小限制");
