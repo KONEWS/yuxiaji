@@ -133,3 +133,8 @@
 .theme-yuehua .mobile-view-tabs.yuehua-sliding > button {
   border-color: transparent; background: transparent; box-shadow: none;
 }
+
+/* A cleared status must not retain the touch browser's sticky hover pill. */
+.theme-yuehua .status-tabs > button:not(.active) {
+  background: transparent; box-shadow: none;
+}
