@@ -69,7 +69,7 @@ export function YuehuaMotion() {
         group.style.setProperty("--slide-height", height + "px");
         group.style.setProperty("--slide-opacity", visible ? "1" : "0");
         group.classList.add("yuehua-sliding");
-        if (changed) animateContent(group);
+        if (changed && visible) animateContent(group);
       }
       cancelAnimationFrame(readyFrame);
       readyFrame = requestAnimationFrame(() => {
