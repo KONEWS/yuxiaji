@@ -240,6 +240,15 @@ async function readResponse(response: Response, writing = false): Promise<JsonOb
   try { payload = record(await response.json()); } catch { payload = null; }
   if (!response.ok || !payload || Object.hasOwn(payload, "error")) {
     const status = response.ok ? 502 : response.status;
+    if (writing && payload?.code === "music_cover_upload_failed") {
+      const stages = ["service", "download", "transform", "store", "attach", "confirm"];
+      const reasons = ["images_unavailable", "image_too_large", "empty_image", "invalid_image", "mime_mismatch", "invalid_output", "record_changed", "download_http_error", "operation_failed"];
+      const data: JsonObject = {};
+      if (typeof payload.stage === "string" && stages.includes(payload.stage)) data.stage = payload.stage;
+      if (typeof payload.reason === "string" && reasons.includes(payload.reason)) data.reason = payload.reason;
+      if (typeof payload.upstreamStatus === "number" && Number.isInteger(payload.upstreamStatus) && payload.upstreamStatus >= 400 && payload.upstreamStatus <= 599) data.upstreamStatus = payload.upstreamStatus;
+      throw new ToolFailure("music_cover_upload_failed", "封面处理失败，原记录需读回核对。", status, data);
+    }
     const existingId = positiveId(payload?.existingId);
     if (status === 409 && payload?.duplicate === true && existingId) {
       throw new ToolFailure("duplicate", "已有相同来源的画廊条目，请读取现有条目后编辑。", 409, { existingId });

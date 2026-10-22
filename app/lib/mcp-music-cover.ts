@@ -43,26 +43,32 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
   const objectKey = `media-assets/${await hash(identity.userKey)}/gallery/${reservation.id}`;
   let stored = false;
   let attached = false;
+  let stage = "service";
   try {
     const images = (env as typeof env & { IMAGES?: CoverImagesBinding }).IMAGES;
     if (!processImage && !images) throw new Error("封面转换服务不可用");
+    stage = "download";
     const input = await downloadCoverImage(fileUrl, body.file.mime_type);
+    stage = "transform";
     const output = processImage ? await processImage(input.bytes) : await transformCoverImage(input.bytes, images!);
     const imageHash = await hash(input.bytes);
     const payloadBytes = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer;
+    stage = "store";
     await env.BUCKET.put(objectKey, payloadBytes, { httpMetadata: { contentType: "image/webp" } });
     stored = true;
     let metadata: Record<string, unknown>;
     try { metadata = JSON.parse(existing.metadata); } catch { metadata = {}; }
+    stage = "attach";
     const [saved] = await db.update(userSubjects).set({
       image, metadata: JSON.stringify(normalizeMediaMetadata({ ...metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 })), updatedAt: new Date(),
     }).where(and(conditions, eq(userSubjects.title, body.expectedTitle), eq(userSubjects.updatedAt, existing.updatedAt))).returning({ id: userSubjects.id });
     if (!saved) throw new Error("音乐条目已被其他操作修改");
     attached = true;
     const payload = { ok: true, id: body.id, image, imageHash, uploadFingerprint: fingerprint };
+    stage = "confirm";
     await finishAgentOperation(reservation.id, 200, payload);
     return agentJson(payload);
-  } catch {
+  } catch (error) {
     // Never persist or return signed file URLs, underlying fetch errors or tokens.
     if (stored && !attached) {
       // A D1 response can fail after committing. Keep an asset if the update's
@@ -75,7 +81,23 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
         if (!references.length) await bucket.delete(objectKey);
       } catch { /* Preserve the object when reference status is uncertain. */ }
     }
-    const payload = { error: "封面上传未完成，请读取条目核对；文件链接失效时重新附图并使用新的上传键", uploadFingerprint: fingerprint };
+    // Expose only fixed stages, known validation reasons and numeric statuses.
+    // Never include upstream messages, request URLs or file references.
+    const reasons: Record<string, string> = {
+      "封面转换服务不可用": "images_unavailable",
+      "图片超过大小限制": "image_too_large",
+      "图片文件为空": "empty_image",
+      "封面必须是有效的 JPG、PNG 或 WebP 图片": "invalid_image",
+      "图片内容与 MIME 类型不匹配": "mime_mismatch",
+      "封面转换失败": "invalid_output",
+      "音乐条目已被其他操作修改": "record_changed",
+    };
+    const message = error instanceof Error ? error.message : "";
+    const upstreamStatus = error instanceof Error && "status" in error && typeof error.status === "number"
+      && Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : undefined;
+    const reason = reasons[message] ?? (upstreamStatus ? "download_http_error" : "operation_failed");
+    const payload = { error: "封面上传未完成，请读取条目核对", code: "music_cover_upload_failed",
+      stage, reason, ...(upstreamStatus ? { upstreamStatus } : {}), uploadFingerprint: fingerprint };
     await finishAgentOperation(reservation.id, 502, payload).catch(() => undefined);
     return agentJson(payload, 502);
   }
