@@ -242,7 +242,7 @@ async function readResponse(response: Response, writing = false): Promise<JsonOb
     const status = response.ok ? 502 : response.status;
     if (writing && payload?.code === "music_cover_upload_failed") {
       const stages = ["service", "download", "transform", "store", "attach", "confirm"];
-      const reasons = ["images_unavailable", "image_too_large", "empty_image", "invalid_image", "mime_mismatch", "invalid_output", "record_changed", "download_http_error", "operation_failed"];
+      const reasons = ["images_unavailable", "image_too_large", "empty_image", "invalid_image", "mime_mismatch", "invalid_output", "record_changed", "download_http_error", "download_network_error", "download_redirect_error", "operation_failed"];
       const data: JsonObject = {};
       if (typeof payload.stage === "string" && stages.includes(payload.stage)) data.stage = payload.stage;
       if (typeof payload.reason === "string" && reasons.includes(payload.reason)) data.reason = payload.reason;

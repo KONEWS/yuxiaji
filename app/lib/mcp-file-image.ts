@@ -58,7 +58,23 @@ export async function boundedImageBytes(response: Response, limit: number) {
 }
 
 export async function downloadCoverImage(url: URL, declaredType?: string, fetcher: typeof fetch = fetch) {
-  const response = await fetcher(url, { redirect: "error", signal: AbortSignal.timeout(20000) });
+  // Signed ChatGPT URLs may redirect between regional file nodes. Validate
+  // every destination before requesting it; never forward credentials/headers.
+  const signal = AbortSignal.timeout(20000);
+  let current = url;
+  let response: Response;
+  for (let redirects = 0; ; redirects++) {
+    try { response = await fetcher(current, { redirect: "manual", signal }); }
+    catch {
+      throw Object.assign(new Error("文件下载连接失败"), { reason: "download_network_error" });
+    }
+    if (![301, 302, 303, 307, 308].includes(response.status)) break;
+    const location = response.headers.get("location");
+    await response.body?.cancel();
+    if (redirects >= 3 || !location) throw Object.assign(new Error("文件跳转无效"), { reason: "download_redirect_error" });
+    try { current = chatGPTFileUrl(new URL(location, current).href); }
+    catch { throw Object.assign(new Error("文件跳转地址不允许"), { reason: "download_redirect_error" }); }
+  }
   const bytes = await boundedImageBytes(response, MAX_COVER_INPUT_BYTES);
   const type = coverImageType(bytes);
   if (!type) throw new Error("封面必须是有效的 JPG、PNG 或 WebP 图片");
