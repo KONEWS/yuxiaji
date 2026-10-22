@@ -55,25 +55,35 @@ export function YuehuaMotion() {
         const active = group.querySelector<HTMLElement>(":scope > button.active");
         const bounds = group.getBoundingClientRect();
         const box = active?.getBoundingClientRect();
-        return { group, active, visible: Boolean(box?.width && bounds.width),
+        return { group, active, hadHighlight: group.style.getPropertyValue("--slide-opacity") === "1",
+          visible: Boolean(box?.width && bounds.width),
           x: box ? box.left - bounds.left - group.clientLeft + group.scrollLeft : 0,
           y: box ? box.top - bounds.top - group.clientTop + group.scrollTop : 0,
           width: box?.width ?? 0, height: box?.height ?? 0 };
       });
-      for (const { group, active, visible, x, y, width, height } of measurements) {
+      for (const { group, active, hadHighlight, visible, x, y, width, height } of measurements) {
         const changed = selected.has(group) && selected.get(group) !== active;
         selected.set(group, active);
-        group.style.setProperty("--slide-x", x + "px");
-        group.style.setProperty("--slide-y", y + "px");
-        group.style.setProperty("--slide-width", width + "px");
-        group.style.setProperty("--slide-height", height + "px");
+        // Clearing a filter fades the highlight where it was. Collapsing its
+        // rectangle to zero would animate it toward the container's origin.
+        if (visible) {
+          // A new selection after clearing starts at its own button, not at
+          // the old invisible rectangle (also covers responsive hidden groups).
+          if (!hadHighlight) group.classList.remove("yuehua-slide-ready");
+          group.style.setProperty("--slide-x", x + "px");
+          group.style.setProperty("--slide-y", y + "px");
+          group.style.setProperty("--slide-width", width + "px");
+          group.style.setProperty("--slide-height", height + "px");
+        }
         group.style.setProperty("--slide-opacity", visible ? "1" : "0");
         group.classList.add("yuehua-sliding");
         if (changed && visible) animateContent(group);
       }
       cancelAnimationFrame(readyFrame);
       readyFrame = requestAnimationFrame(() => {
-        if (!stopped) groups.forEach(group => group.classList.add("yuehua-slide-ready"));
+        if (!stopped) measurements.forEach(({ group, visible }) => {
+          if (visible) group.classList.add("yuehua-slide-ready");
+        });
       });
     }
     function schedule() {
