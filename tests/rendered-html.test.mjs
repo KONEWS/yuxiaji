@@ -8,7 +8,11 @@ function fetchLocal(path, init = {}) {
   // Use the real HTTP origin. unstable_dev.fetch rewrites it to a placeholder
   // and can stall on a redirect after a POST is rejected before reading its body.
   const url = new URL(path, `http://${worker.address}:${worker.port}`);
-  return fetch(url, { signal: AbortSignal.timeout(15000), ...init });
+  // Do not reuse a connection after an early authorization rejection, whose
+  // request body may not have been consumed by the local Worker proxy.
+  return fetch(url, { signal: AbortSignal.timeout(15000), ...init,
+    headers: { ...init.headers, connection: "close" },
+  });
 }
 
 async function uploadRequest(form) {
