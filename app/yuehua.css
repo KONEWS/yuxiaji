@@ -7,7 +7,11 @@
   background: radial-gradient(ellipse at 8% 5%, #d6f1ff 0, transparent 45%),
     radial-gradient(ellipse at 94% 30%, #e5ddfa 0, transparent 48%), #f3f4fc;
 }
-.theme-yuehua .custom-background { z-index: -1; }
+/* The image uses a stable viewport box so mobile browser chrome cannot rescale cover. */
+.theme-yuehua .custom-background {
+  z-index: -1; bottom: auto;
+  height: 100vh; height: 100lvh;
+}
 .theme-yuehua .custom-background::after { background: #eeedfa33; }
 .theme-yuehua .topbar { background: #f7f7ffed; border-bottom-color: #ffffffbf; box-shadow: 0 8px 30px #4f47780b; }
 .theme-yuehua .moon-brand { width: 44px; height: 44px; justify-content: center; flex: 0 0 44px; border-radius: 50%; }
