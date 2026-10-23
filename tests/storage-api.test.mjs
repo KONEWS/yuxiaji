@@ -188,3 +188,81 @@ test("storage rejects invalid metadata, unowned media and Hikari deletion", asyn
   const denied = await api("/api/agent/storage?mediaId=1&id=1", "DELETE", undefined, "test-hikari-token", "denied-delete");
   assert.equal(denied.status, 403);
 });
+
+
+test("request fingerprints reject changed content, resource and delete query without repeating writes", async () => {
+  const body = { mediaId: 5, provider: "test", path: "/fingerprint" };
+  const created = await api("/api/agent/storage", "POST", body, undefined, "fingerprint");
+  assert.equal(created.status, 201);
+  const reordered = await api("/api/agent/storage", "POST", { path: body.path, provider: body.provider, mediaId: 5 }, undefined, "fingerprint");
+  assert.equal(reordered.replay, "true");
+  for (const changed of [{ ...body, path: "/changed" }, { ...body, mediaId: 6 }]) {
+    const result = await api("/api/agent/storage", "POST", changed, undefined, "fingerprint");
+    assert.equal(result.status, 409);
+    assert.equal(result.body.code, "idempotency_conflict");
+  }
+  assert.equal((await api("/api/agent/devices", "POST", { name: "conflict" }, undefined, "fingerprint")).status, 409);
+  assert.equal((await api("/api/agent/storage?mediaId=5")).body.storageLinks.length, 1);
+  const removed = await api("/api/agent/tags?tag=absent-a", "DELETE", undefined, undefined, "query-key");
+  assert.equal(removed.status, 200);
+  assert.equal((await api("/api/agent/tags?tag=absent-b", "DELETE", undefined, undefined, "query-key")).body.code, "idempotency_conflict");
+  assert.equal((await api("/api/agent/storage", "POST", body, undefined, "x".repeat(161))).status, 400);
+});
+
+test("pending operations become uncertain, remain isolated, and are never automatically re-executed", async () => {
+  const reserved = await api("/__test/reserve", "POST", { value: 1 }, undefined, "stale-operation");
+  assert.equal(reserved.body.kind, "reserved");
+  assert.equal((await api("/__test/reserve", "POST", { value: 2 }, undefined, "stale-operation")).body.code, "idempotency_conflict");
+  assert.equal((await api("/__test/reserve", "POST", { value: 1 }, undefined, "stale-operation")).body.code, "operation_pending");
+  await sql([`UPDATE agent_operations SET started_at=1 WHERE id=${reserved.body.id}`]);
+  const stale = await api("/__test/reserve", "POST", { value: 1 }, undefined, "stale-operation");
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.code, "operation_outcome_unknown");
+  assert.equal(stale.body.retryable, false);
+  const path = "/api/agent/operations?idempotencyKey=stale-operation";
+  const state = await api(path);
+  assert.equal(state.body.operation.state, "uncertain");
+  assert.equal(state.body.operation.nextAction, "read_resource_before_retry");
+  assert.equal((await api(path, "GET", undefined, "test-hikari-token")).status, 404);
+  assert.equal((await api(path, "GET", undefined, "invalid")).status, 401);
+  assert.ok(!JSON.stringify(state.body).includes("requestHash"));
+});
+
+test("confirmed pre-write failures can be claimed only once, then replay success", async () => {
+  const key = "safe-recovery";
+  const body = { value: "safe" };
+  const reserved = await api("/__test/reserve", "POST", body, undefined, key);
+  const id = reserved.body.id;
+  await sql([`UPDATE agent_operations SET started_at=1 WHERE id=${id}`]);
+  await api("/__test/finish", "POST", { id, status: 503, payload: { error: "service unavailable" }, retrySafe: true });
+  assert.equal((await api("/api/agent/operations?idempotencyKey=" + key)).body.operation.state, "retryable");
+  assert.equal((await api("/__test/reserve", "POST", body, undefined, key)).body.code, "operation_retry_later");
+  await sql([`UPDATE agent_operations SET started_at=1 WHERE id=${id}`]);
+  const retries = await Promise.all(Array.from({ length: 4 }, () => api("/__test/reserve", "POST", body, undefined, key)));
+  assert.equal(retries.filter(r => r.body.kind === "reserved").length, 1);
+  assert.equal(retries.find(r => r.body.kind === "reserved").body.id, id);
+  await api("/__test/finish", "POST", { id, status: 201, payload: { ok: true, value: "saved" } });
+  // A catch after an uncertain audit response must not downgrade a committed success.
+  await api("/__test/finish", "POST", { id, status: 500, payload: { error: "late error" } });
+  const replay = await api("/__test/reserve", "POST", body, undefined, key);
+  assert.equal(replay.replay, "true");
+  assert.equal(replay.status, 201);
+  assert.equal(replay.body.value, "saved");
+});
+
+test("uncertain failures are replayed, oversized receipts stay valid JSON, and legacy rows remain compatible", async () => {
+  const body = { value: "uncertain" };
+  const reserved = await api("/__test/reserve", "POST", body, undefined, "uncertain-failure");
+  await api("/__test/finish", "POST", { id: reserved.body.id, status: 500, payload: { error: "unknown commit outcome" } });
+  const failed = await api("/__test/reserve", "POST", body, undefined, "uncertain-failure");
+  assert.equal(failed.replay, "true");
+  assert.equal(failed.status, 500);
+  const large = await api("/__test/reserve", "POST", {}, undefined, "large-receipt");
+  await api("/__test/finish", "POST", { id: large.body.id, status: 200, payload: { data: "x".repeat(200001) } });
+  const receipt = await api("/__test/reserve", "POST", {}, undefined, "large-receipt");
+  assert.equal(receipt.status, 409);
+  assert.equal(receipt.body.code, "operation_receipt_too_large");
+  assert.equal(receipt.body.retryable, false);
+  await sql(["INSERT INTO agent_operations (user_key,agent,idempotency_key,resource,action,status_code,response_json,created_at) VALUES ('storage-test-owner','nova','legacy-replay','fixture','create',200,'{\"ok\":true}',1)"]);
+  assert.equal((await api("/__test/reserve", "POST", {}, undefined, "legacy-replay")).replay, "true");
+});

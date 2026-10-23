@@ -10,6 +10,7 @@ export async function GET(request: Request) {
     user: identity.userKey,
     permissions: agentPermissions(identity),
     endpoints: {
+      operations: "/api/agent/operations",
       media: "/api/agent/media",
       devices: "/api/agent/devices",
       tags: "/api/agent/tags",

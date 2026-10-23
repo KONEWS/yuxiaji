@@ -7,7 +7,7 @@ import { useEffect } from "react";
 export function YuehuaMotion() {
   useEffect(() => {
     const root = document.body;
-    const selector = ".desktop-nav, .mobile-view-tabs, .status-tabs, .media-tabs, .view-toggle, .week-strip, .device-category-tabs, .collection-chips, .calendar-tabs, .calendar-source-tabs, .subcategory-tabs, .font-options, .title-options, .media-type-picker, .bangumi-sync-direction";
+    const selector = ".yuehua-segments, .desktop-nav, .mobile-view-tabs, .status-tabs, .media-tabs, .view-toggle, .week-strip, .device-category-tabs, .collection-chips, .calendar-tabs, .calendar-source-tabs, .subcategory-tabs, .font-options, .title-options, .media-type-picker, .bangumi-sync-direction";
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     const watched = new Set<HTMLElement>();
     const selected = new WeakMap<HTMLElement, HTMLElement | null>();

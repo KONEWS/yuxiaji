@@ -182,6 +182,23 @@ test("failed music cover downloads leave the existing cover untouched", async ()
     assert.equal(saved.image, media.image);
   }
 });
+test("temporary cover download failure retries the same operation without duplicating or leaking file URLs", async () => {
+  const media = successful(await call("create_media", { type: "music", title: "Recover cover", idempotencyKey: "recover-cover-create" })).media;
+  const base = { id: media.id, expectedTitle: media.title, idempotencyKey: "recover-cover", file: { file_id: "file-recover", download_url: "https://files.oaiusercontent.com/unavailable.webp" } };
+  const failed = await call("upload_music_cover", base);
+  toolDenied(failed);
+  assert.equal(failed.result.structuredContent.error.retryable, true);
+  const [before] = await query("SELECT id FROM agent_operations WHERE resource='music_cover' AND resource_id=? AND agent='chatgpt'", [media.id]);
+  await sql([`UPDATE agent_operations SET started_at=1 WHERE id=${before.id}`]);
+  const recovered = successful(await call("upload_music_cover", { ...base, file: { ...base.file, download_url: "https://files.oaiusercontent.com/fixture.webp" } }));
+  assert.equal(recovered.media.image, `/api/media-assets?v=${before.id}`);
+  const rows = await query("SELECT id,status_code,retry_safe,response_json FROM agent_operations WHERE resource='music_cover' AND resource_id=? AND agent='chatgpt'", [media.id]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status_code, 200);
+  assert.equal(rows[0].retry_safe, 0);
+  assert.ok(!rows[0].response_json.includes("oaiusercontent"));
+});
+
 async function refresh(credentials, overrides = {}) {
   return tokenRequest({ grant_type: "refresh_token", client_id: credentials.clientId, refresh_token: credentials.refresh_token, resource, ...overrides });
 }

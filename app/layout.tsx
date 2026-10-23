@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "./yuehua.css";
 import "./yuehua-secondary.css";
+import "./yuehua-components.css";
 import { YuehuaMotion } from "./components/tracker/yuehua-motion";
 
 export const metadata: Metadata = {

@@ -1,5 +1,7 @@
 "use client";
 
+import { ActionButton, DialogActions, DialogHeading } from "./ui";
+
 import { useRef, useState } from "react";
 import { uploadDeviceAsset } from "../../lib/client-api";
 import { DEVICE_STATUSES, type DeviceCategoryDefinition, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap } from "../../lib/constants";
@@ -27,7 +29,7 @@ function DeviceModal({ form, setForm, device, categories, subCategories, close, 
     }
   };
   return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal-card device-modal" role="dialog" aria-modal="true" aria-labelledby="device-title">
-    <div className="modal-title"><div><p>藏品库</p><h2 id="device-title">{device ? "编辑设备" : "添加设备"}</h2></div><button onClick={close} aria-label="关闭">×</button></div>
+    <DialogHeading eyebrow="藏品库" title={device ? "编辑设备" : "添加设备"} id="device-title" onClose={close} closeLabel="关闭" />
     <div className="form-grid">
       <label className="wide">设备名称<input autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：雷鸟 GT Max" /></label>
       <label>大类<RoundedSelect value={form.category} onChange={(category) => setForm({ ...form, category, subCategory: subCategories[category]?.includes(form.subCategory) ? form.subCategory : "" })} options={categories.map((item) => ({ value: item.id, label: item.label }))} ariaLabel="设备大类" /></label>
@@ -37,11 +39,11 @@ function DeviceModal({ form, setForm, device, categories, subCategories, close, 
       <label>入手日期<input type="date" value={form.purchaseDate} onChange={(event) => setForm({ ...form, purchaseDate: event.target.value })} /></label>
       <label>评分（1-10）<RoundedSelect value={form.rating} onChange={(rating) => setForm({ ...form, rating })} options={[{ value: "", label: "未评分" }, ...Array.from({ length: 10 }, (_, index) => ({ value: String(index + 1), label: `${index + 1} 分` }))]} ariaLabel="设备评分" /></label>
       <label className="wide">特性标签<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="用逗号分隔，例如：平头塞，LDAC，3DoF" /></label>
-      <div className="wide device-cover-field"><label>封面图片<input type="url" value={form.coverImage} onChange={(event) => setForm({ ...form, coverImage: event.target.value })} placeholder="图片地址，或从本地上传" /></label><input ref={coverInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "cover")} /><button type="button" className="upload-button" onClick={() => coverInput.current?.click()} disabled={uploading === "cover"}>{uploading === "cover" ? "上传中…" : "上传封面"}</button>{form.coverImage && <CoverPositionEditor src={form.coverImage} x={form.coverPositionX} y={form.coverPositionY} zoom={form.coverZoom} alt="藏品封面位置预览" onChange={(coverPositionX, coverPositionY, coverZoom) => setForm({ ...form, coverPositionX, coverPositionY, coverZoom: coverZoom ?? form.coverZoom })} />}</div>
-      <label className="wide">购买凭证截图<input type="url" value={form.receiptImage} onChange={(event) => setForm({ ...form, receiptImage: event.target.value })} placeholder="订单截图地址，或从本地上传" /><input ref={receiptInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "receipt")} /><button type="button" className="upload-button" onClick={() => receiptInput.current?.click()} disabled={uploading === "receipt"}>{uploading === "receipt" ? "上传中…" : "上传凭证"}</button>{form.receiptImage && <span className="cover-preview"><img src={form.receiptImage} alt="凭证预览" referrerPolicy="no-referrer" /><b>已上传凭证</b></span>}</label>
+      <div className="wide device-cover-field"><label>封面图片<input type="url" value={form.coverImage} onChange={(event) => setForm({ ...form, coverImage: event.target.value })} placeholder="图片地址，或从本地上传" /></label><input ref={coverInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "cover")} /><ActionButton type="button" className="upload-button" onClick={() => coverInput.current?.click()} disabled={uploading === "cover"}>{uploading === "cover" ? "上传中…" : "上传封面"}</ActionButton>{form.coverImage && <CoverPositionEditor src={form.coverImage} x={form.coverPositionX} y={form.coverPositionY} zoom={form.coverZoom} alt="藏品封面位置预览" onChange={(coverPositionX, coverPositionY, coverZoom) => setForm({ ...form, coverPositionX, coverPositionY, coverZoom: coverZoom ?? form.coverZoom })} />}</div>
+      <label className="wide">购买凭证截图<input type="url" value={form.receiptImage} onChange={(event) => setForm({ ...form, receiptImage: event.target.value })} placeholder="订单截图地址，或从本地上传" /><input ref={receiptInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "receipt")} /><ActionButton type="button" className="upload-button" onClick={() => receiptInput.current?.click()} disabled={uploading === "receipt"}>{uploading === "receipt" ? "上传中…" : "上传凭证"}</ActionButton>{form.receiptImage && <span className="cover-preview"><img src={form.receiptImage} alt="凭证预览" referrerPolicy="no-referrer" /><b>已上传凭证</b></span>}</label>
       <label className="wide">评价<textarea value={form.review} onChange={(event) => setForm({ ...form, review: event.target.value })} placeholder="使用感受、购入理由…" /></label>
     </div>
-    <div className="submit-row"><button onClick={close}>取消</button><button className="primary-button" onClick={submit}>{device ? "保存修改" : "加入藏品库"}</button></div>
+    <DialogActions><ActionButton onClick={close}>取消</ActionButton><ActionButton variant="primary" onClick={submit}>{device ? "保存修改" : "加入藏品库"}</ActionButton></DialogActions>
   </section></div>;
 }
 
@@ -93,18 +95,18 @@ function DeviceSubCategoryModal({ value, categoryLabels, initialCategory, close,
     });
   };
   return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal-card subcategory-modal" role="dialog" aria-modal="true" aria-labelledby="subcategory-title">
-    <div className="modal-title"><div><p>藏品库</p><h2 id="subcategory-title">管理设备分类</h2></div><button onClick={close} aria-label="关闭">×</button></div>
+    <DialogHeading eyebrow="藏品库" title="管理设备分类" id="subcategory-title" onClose={close} closeLabel="关闭" />
     <nav className="subcategory-tabs" aria-label="选择设备大类">{Object.entries(draftLabels).filter(([, label]) => label.trim()).map(([id, label]) => <button key={id} className={activeCategory === id ? "active" : ""} onClick={() => setActiveCategory(id)}>{label}</button>)}{addingCategory ? <span className="category-add-inline"><input id="device-category-name" autoFocus value={categoryName} onChange={(event) => setCategoryName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") addCategory(); if (event.key === "Escape") { setCategoryName(""); setAddingCategory(false); } }} maxLength={30} placeholder="大类名称" aria-label="新设备大类名称" /><button type="button" onClick={addCategory} aria-label="确认添加设备大类" title="确认">✔</button></span> : <button type="button" className="category-add-tab" onClick={() => setAddingCategory(true)} aria-label="添加设备大类">＋</button>}</nav>
     <div className="category-name-editor"><label>当前大类名称<input value={draftLabels[activeCategory] || ""} onChange={(event) => setDraftLabels((labels) => ({ ...labels, [activeCategory]: event.target.value }))} maxLength={30} /></label><button type="button" className="manager-delete-button category-delete-button" onClick={removeCategory} aria-label="删除当前设备大类" title="删除当前大类">×</button></div>
-    <div className="subcategory-sort-list">{(draft[activeCategory] || []).length ? (draft[activeCategory] || []).map((subCategory, index) => <div key={subCategory} draggable onDragStart={() => { dragIndex.current = index; }} onDragEnd={() => { dragIndex.current = null; }} onDragOver={(event) => event.preventDefault()} onDrop={() => move(index)}><span aria-hidden="true">☰</span><b>{subCategory}</b><small>拖动排序</small><button type="button" className="manager-delete-button" onClick={() => setDraft((current) => ({ ...current, [activeCategory]: (current[activeCategory] || []).filter((item) => item !== subCategory) }))} aria-label={`删除子类${subCategory}`} title="删除子类">×</button></div>) : <p className="manager-empty">当前大类还没有子类</p>}</div>
+    <div className="subcategory-sort-list">{(draft[activeCategory] || []).length ? (draft[activeCategory] || []).map((subCategory, index) => <div key={subCategory} draggable onDragStart={() => { dragIndex.current = index; }} onDragEnd={() => { dragIndex.current = null; }} onDragOver={(event) => event.preventDefault()} onDrop={() => move(index)}><span aria-hidden="true">☰</span><b>{subCategory}</b><small>拖动排序</small><ActionButton type="button" className="manager-delete-button" onClick={() => setDraft((current) => ({ ...current, [activeCategory]: (current[activeCategory] || []).filter((item) => item !== subCategory) }))} aria-label={`删除子类${subCategory}`} title="删除子类">×</ActionButton></div>) : <p className="manager-empty">当前大类还没有子类</p>}</div>
     <div className="subcategory-add"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") add(); }} placeholder="新子类名称" /><button onClick={add}>＋ 添加</button></div>
-    <div className="submit-row"><button onClick={close}>取消</button><button className="primary-button" onClick={() => save(draft, draftLabels)}>保存修改</button></div>
+    <DialogActions><ActionButton onClick={close}>取消</ActionButton><ActionButton variant="primary" onClick={() => save(draft, draftLabels)}>保存修改</ActionButton></DialogActions>
   </section></div>;
 }
 
 function ReceiptModal({ device, close }: { device: Device; close: () => void }) {
   return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal-card receipt-modal" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
-    <div className="modal-title"><div><p>购买凭证</p><h2 id="receipt-title">{device.name}</h2></div><button onClick={close} aria-label="关闭">×</button></div>
+    <DialogHeading eyebrow="购买凭证" title={device.name} id="receipt-title" onClose={close} closeLabel="关闭" />
     <img className="receipt-image" src={device.receiptImage} alt={`${device.name}购买凭证`} referrerPolicy="no-referrer" />
     <p className="receipt-meta">{device.price != null ? `入手价 ¥${device.price.toLocaleString("zh-CN")}` : "入手价未记录"}{device.purchaseDate ? ` · ${device.purchaseDate} 入手` : ""}{device.tags.length ? ` · ${device.tags.join(" / ")}` : ""}</p>
   </section></div>;

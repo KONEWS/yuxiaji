@@ -120,7 +120,7 @@ export async function POST(request: Request) {
   try {
     reservation = await reserveAgentOperation(identity, {
       request,
-      body: { idempotencyKey, ...(galleryId ? { galleryId } : {}), contentType: detectedType, size: file.size, imageHash: hash },
+      body: { idempotencyKey, ...(galleryId ? { galleryId } : {}), contentType: detectedType, size: file.size, imageHash: hash, sourceUrl: String(form.get("sourceUrl") || ""), isCover: String(form.get("isCover") || "").toLowerCase() === "true" },
       resource: "gallery_asset",
       action: "upload",
       resourceId: galleryId,
@@ -135,8 +135,8 @@ export async function POST(request: Request) {
   try {
     const images = (env as RuntimeEnv).IMAGES;
     if (!images) {
-      const payload = { error: "Cloudflare Images 绑定不可用，暂时无法生成缩略图" };
-      await finishAgentOperation(reservation.id, 503, payload);
+      const payload = { error: "Cloudflare Images 绑定不可用，暂时无法生成缩略图", retryable: true, retryAfterSeconds: 5 };
+      await finishAgentOperation(reservation.id, 503, payload, { retrySafe: true });
       return agentJson(payload, 503);
     }
     const transformed = await images.input(new Blob([input], { type: detectedType }).stream())

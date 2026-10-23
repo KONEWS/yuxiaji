@@ -15,6 +15,7 @@ globalThis.fetch = async (input, init) => {
   const url = new URL(input);
   if (url.origin !== "https://files.oaiusercontent.com" || init?.redirect !== "manual") throw new Error("Network access is disabled in the isolated MCP fixture");
   imageDownloads++;
+  if (url.pathname === "/unavailable.webp") return new Response("unavailable", { status: 503 });
   if (url.pathname === "/fixture.webp") return new Response(fixtureImage, { headers: { "content-type": "image/webp" } });
   if (url.pathname === "/oversize.webp") return new Response(fixtureImage, { headers: { "content-length": String(21*1024*1024) } });
   return new Response("not an image", { headers: { "content-type": "text/html" } });
