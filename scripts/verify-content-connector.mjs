@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 // or reading/writing the owner's collection.
 const base = new URL(process.env.YUEXIAJI_BASE_URL || "https://yuexia.luo66ccff.cc.cd").origin;
 const requiredColumns = {
+  agent_operations: ["request_hash", "retry_safe", "started_at"],
   mcp_oauth_clients: ["client_id", "client_name", "redirect_uris_json", "created_at"],
   mcp_oauth_grants: ["id", "user_key", "client_id", "resource", "scopes_json", "created_at", "last_used_at", "revoked_at"],
   mcp_oauth_codes: ["code_hash", "grant_id", "client_id", "redirect_uri", "resource", "code_challenge", "scopes_json", "expires_at", "consumed_at"],
@@ -24,7 +25,7 @@ for (const [table, names] of Object.entries(requiredColumns)) {
   const actual = new Set(rows.filter((row) => row.table_name === table).map((row) => row.name));
   for (const name of names) assert.ok(actual.has(name), `${table}.${name} exists in the production database`);
 }
-console.log("Verified production columns in all four OAuth tables");
+console.log("Verified production columns in all four OAuth tables and Agent operation recovery fields");
 
 async function verify(path, init, check) {
   let failure;
