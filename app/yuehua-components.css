@@ -1,0 +1,68 @@
+/* Shared controls: new dialogs use ui.tsx; legacy surfaces consume these tokens. */
+.theme-yuehua {
+  --control-radius: 999px;
+  --control-border: #d3d4e7;
+  --control-surface: #ffffffb8;
+  --control-selected: #f3f0f8;
+  --control-selected-border: #d4cede;
+  --control-focus: #7b728d;
+  --control-shadow: inset 0 1px #ffffffd9, 0 3px 9px #514a730b;
+  --control-duration: .2s;
+  --danger-ink: #a03853;
+  --danger-border: #ebc6d0;
+  --danger-surface: #fff3f7;
+  --scrollbar-thumb: #8d7e9f;
+}
+.theme-yuehua .yuehua-button {
+  border: 1px solid var(--control-border); border-radius: var(--control-radius);
+  background: var(--control-surface); color: var(--ink); box-shadow: var(--control-shadow);
+  padding: 9px 16px; font: inherit; cursor: pointer;
+  transition: background var(--control-duration) ease, border-color var(--control-duration) ease, box-shadow var(--control-duration) ease;
+}
+.theme-yuehua .yuehua-button[data-variant="primary"] {
+  border-color: color-mix(in srgb, var(--primary-strong) 45%, #fff);
+  background: linear-gradient(135deg, #e2f7ff, var(--primary)); color: #183d50;
+  box-shadow: inset 0 1px #ffffffd9, 0 4px 12px #66ccff24;
+}
+.theme-yuehua .yuehua-button:is([data-variant="danger"], .manager-delete-button) {
+  border-color: var(--danger-border); background: var(--danger-surface); color: var(--danger-ink);
+}
+.theme-yuehua .yuehua-button:disabled,
+.theme-yuehua .yuehua-segments > button:disabled { opacity: .5; cursor: not-allowed; }
+.theme-yuehua :is(.yuehua-button, .yuehua-segments > button):focus-visible {
+  outline: 2px solid var(--control-focus); outline-offset: 2px;
+}
+.theme-yuehua .yuehua-dialog-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.theme-yuehua .yuehua-dialog-heading > div { min-width: 0; }
+.theme-yuehua .yuehua-dialog-heading h2 { overflow-wrap: anywhere; }
+.theme-yuehua .yuehua-dialog-heading .yuehua-close {
+  display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; padding: 0; font-size: 22px; line-height: 1;
+}
+.theme-yuehua .yuehua-dialog-actions {
+  display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap;
+  background: transparent; box-shadow: none;
+}
+.theme-yuehua .yuehua-segments {
+  display: flex; gap: 6px; padding: 5px; border: 1px solid #ffffffb3; border-radius: 20px; background: #e8e8f380;
+}
+.theme-yuehua .yuehua-segments:is(.font-options, .title-options) { display: grid; }
+.theme-yuehua .yuehua-segments > button {
+  min-width: 0; border: 1px solid transparent; border-radius: 15px; background: transparent;
+  color: var(--muted); cursor: pointer;
+}
+.theme-yuehua .yuehua-segments > button.active {
+  color: var(--ink); border-color: var(--control-selected-border); background: var(--control-selected); box-shadow: inset 0 1px #fff;
+}
+.theme-yuehua .yuehua-segments.yuehua-sliding > button.active {
+  border-color: transparent; background: transparent; box-shadow: none;
+}
+.theme-yuehua .yuehua-segments.yuehua-sliding::before { border-radius: 15px; }
+@media (hover: hover) {
+  .theme-yuehua .yuehua-button:hover:not(:disabled) { border-color: var(--control-focus); box-shadow: inset 0 1px #fff, 0 5px 16px #514a7320; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-yuehua :is(.yuehua-button, .yuehua-segments > button) { transition: none; }
+}
+@media (forced-colors: active) {
+  .theme-yuehua .yuehua-segments > button.active { outline: 2px solid Highlight; outline-offset: -3px; }
+}

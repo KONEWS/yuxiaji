@@ -247,7 +247,21 @@ async function readResponse(response: Response, writing = false): Promise<JsonOb
       if (typeof payload.stage === "string" && stages.includes(payload.stage)) data.stage = payload.stage;
       if (typeof payload.reason === "string" && reasons.includes(payload.reason)) data.reason = payload.reason;
       if (typeof payload.upstreamStatus === "number" && Number.isInteger(payload.upstreamStatus) && payload.upstreamStatus >= 400 && payload.upstreamStatus <= 599) data.upstreamStatus = payload.upstreamStatus;
-      throw new ToolFailure("music_cover_upload_failed", "封面处理失败，原记录需读回核对。", status, data);
+      data.retryable = payload.retryable === true;
+      if (payload.retryable === true) data.retryAfterSeconds = 5;
+      throw new ToolFailure("music_cover_upload_failed", payload.retryable === true ? "封面暂时无法处理，5 秒后使用相同文件和原幂等键重试。" : "封面处理失败，原记录需读回核对。", status, data);
+    }
+    const operationMessages: Record<string, string> = {
+      idempotency_conflict: "此幂等键已用于不同内容；新操作必须使用新键。",
+      operation_pending: "相同操作仍在处理中，5 秒后使用原请求与原幂等键重试。",
+      operation_retry_later: "暂时无法处理，5 秒后使用原请求与原幂等键重试。",
+      operation_outcome_unknown: "操作已超时，结果待核对；先读取目标条目，不要换键重复创建。",
+      operation_receipt_too_large: "操作回执过大，先读取目标条目核对结果。",
+    };
+    if (writing && typeof payload?.code === "string" && Object.hasOwn(operationMessages, payload.code)) {
+      const data: JsonObject = { retryable: payload.retryable === true };
+      if (payload.code === "operation_pending" || payload.code === "operation_retry_later") data.retryAfterSeconds = 5;
+      throw new ToolFailure(payload.code, operationMessages[payload.code], status, data);
     }
     const existingId = positiveId(payload?.existingId);
     if (status === 409 && payload?.duplicate === true && existingId) {

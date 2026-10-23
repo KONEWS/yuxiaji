@@ -58,7 +58,7 @@
   .calendar-row-actions button, .calendar-source-actions button, .calendar-custom-actions button,
   .calendar-list-row > button, .calendar-grid article button, .security-inline-actions .auth-link, .anilist-card-actions .auth-link,
   .auth-primary, .security-close, .add-search > button) {
-  border-radius: 999px; border-color: #d3d4e7; background: #ffffffb8;
+  border-radius: 999px; border-color: var(--control-border); background: var(--control-surface);
   box-shadow: inset 0 1px #ffffffd9, 0 3px 9px #514a730b;
   transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
@@ -83,14 +83,14 @@
 .theme-yuehua :is(.font-options, .title-options, .media-type-picker, .subcategory-tabs, .calendar-tabs, .calendar-source-tabs, .bangumi-sync-direction).yuehua-sliding::before { border-radius: 15px; }
 .theme-yuehua :is(.sync-type-options button, .source-sync-toggle) { border-radius: 12px; background: #ffffffa6; }
 .theme-yuehua :is(.sync-type-options button.active, .source-sync-toggle:has(input:checked)) {
-  border-color: color-mix(in srgb, var(--accent) 45%, #fff); background: #f3f0f8;
+  border-color: color-mix(in srgb, var(--accent) 45%, #fff); background: var(--control-selected);
 }
 .theme-yuehua :is(.danger-button, .manager-delete-button, .gallery-image-controls .remove) {
-  border-color: #ebc6d0; background: #fff3f7; color: #a03853;
+  border-color: var(--danger-border); background: var(--danger-surface); color: var(--danger-ink);
 }
-.theme-yuehua :is(.danger-link, .danger-text, .auth-link.danger-link) { color: #a03853; }
-.theme-yuehua :is(.detail-save-error, .security-message, .auth-message) { color: #a03853; }
-.theme-yuehua .security-panel .security-message { background: #fff3f7; border-radius: 12px; }
+.theme-yuehua :is(.danger-link, .danger-text, .auth-link.danger-link) { color: var(--danger-ink); }
+.theme-yuehua :is(.detail-save-error, .security-message, .auth-message) { color: var(--danger-ink); }
+.theme-yuehua .security-panel .security-message { background: var(--danger-surface); border-radius: 12px; }
 .theme-yuehua .settings-label > span { color: var(--muted); }
 .theme-yuehua .calendar-list-row.followed { background: #e9f5ff9e; }
 .theme-yuehua .calendar-empty { border-color: #c6c4df; border-radius: 18px; background: #ffffff60; }
@@ -142,16 +142,16 @@
 
 /* Selection is neutral glass; reserve cyan for primary actions, not outlines. */
 .theme-yuehua :is(button, input, textarea, select):focus-visible {
-  outline: 2px solid #7b728d; outline-offset: 2px;
+  outline: 2px solid var(--control-focus); outline-offset: 2px;
 }
 .theme-yuehua :is(.modal-card, .detail-drawer, .settings-sheet, .security-panel, .auth-card, .calendar-modal) :is(input, textarea, select):focus-visible {
-  outline-color: #7b728d;
+  outline-color: var(--control-focus);
 }
 .theme-yuehua :is(.tag-library-chips button.active, .tag-manager-cloud-item.active, .tag-manager-actions button.active,
   .device-chips button.active, .all-status.active, .batch-select-trigger.active, .rounded-select-menu button.active,
   .sort-filter-bar label.active, .library-filters label.active, .music-filter-bar label.active, .calendar-filters label.active,
   .sync-type-options button.active, .source-sync-toggle:has(input:checked)) {
-  border-color: #d4cede; background: linear-gradient(135deg, #ffffffed, #f3f0f8);
+  border-color: var(--control-selected-border); background: linear-gradient(135deg, #ffffffed, var(--control-selected));
   box-shadow: inset 0 1px #fff; color: var(--ink);
 }
 .theme-yuehua :is(.rounded-select-trigger:focus-visible, .status-more:focus-visible) {
@@ -175,7 +175,7 @@
 }
 
 .theme-yuehua :is(.font-options, .title-options, .media-type-picker, .subcategory-tabs, .calendar-tabs, .calendar-source-tabs, .bangumi-sync-direction) > button.active {
-  border-color: #d4cede; background: #f3f0f8; box-shadow: inset 0 1px #fff;
+  border-color: var(--control-selected-border); background: var(--control-selected); box-shadow: inset 0 1px #fff;
 }
 .theme-yuehua .yuehua-sliding > button.active { border-color: transparent; background: transparent; box-shadow: none; }
 .theme-yuehua :is(.media-tabs, .device-category-tabs) button.active i,
@@ -194,7 +194,7 @@
 
 /* Secondary panels share a quiet scrollbar; horizontal tab strips stay hidden. */
 .theme-yuehua :where([role="dialog"], [role="dialog"] *, .overlay, .sync-menu, .rounded-select-menu, .security-grid):not(:where(.calendar-tabs, .calendar-source-tabs, .subcategory-tabs, .status-tabs, .media-tabs, .collection-chips, .device-category-tabs)) {
-  scrollbar-width: thin; scrollbar-color: #8d7e9f transparent;
+  scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 /* Chromium/WebKit use a rounded thumb; Firefox keeps the thin color fallback. */
 @supports selector(::-webkit-scrollbar) {

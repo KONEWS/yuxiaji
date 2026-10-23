@@ -131,7 +131,7 @@ Token 变量：`YUEXIAJI_NOVA_TOKEN`、`YUEXIAJI_HIKARI_TOKEN`、`YUEXIAJI_CODEX
 - 唯一范围：`userKey + agent + idempotencyKey`，不是每个端点独立。
 - 同一业务操作重试使用同一个键；不同端点、条目或修改操作使用不同键。
 - 操作占位时 `statusCode=102`；处理中重复调用返回 409；完成后重放此前的状态和 JSON，带 `x-idempotent-replay: true`。
-- 当前未校验同键请求体是否一致，也没有 pending 过期恢复逻辑。写入成功而审计失败时可能返回错误或保留 pending；排查要核对媒体实际数据与 `agent_operations`，不能盲目换键重复创建。
+- 当前已增加请求摘要和安全重试标记，详见第 12 节。写入成功而审计失败时仍需核对实际资源；超时不会自动重跑，不能盲目换键重复创建。
 
 ## 7. 已确认的实现差异与待核查线索
 
@@ -216,3 +216,15 @@ npx wrangler deploy --config wrangler.jsonc
 - `.gitignore` 扩展忽略所有 `.dev.vars*`，仅允许无密钥的 `.dev.vars.example`；编译后 Worker 测试使用独立空环境文件和非持久本地运行时。
 - 本地 `npm run check`、`npm test`（32/32）及 Wrangler 部署 dry run 已通过。源码与现有四个历史提交检查未发现实际凭据、私人数据备份或运行产物；生产数据库、R2 图片与密钥继续留在 Cloudflare。
 - GitHub 的 Linux 检查也已通过。已按用户确认创建 `yuexiaji-github-actions` 专用 Token 并保存为 Actions Secret；编辑权限限 `tsuki-anime-rebuild`，D1 Write 与 Workers Content Read-Only 限本账户，无到期日。账户级只读权限用于 Wrangler `4.92.0` 在上传后读取 Workers 子域名；仅指定 Worker Editor 的首次发布已更新网站，但收尾查询因权限不足而失败。后续以对应 GitHub Actions 的最终结果和实际线上响应为准。
+
+
+## 12. 共用组件与操作恢复
+
+- 共用组件：`app/components/tracker/ui.tsx` 提供 `ActionButton`、`DialogHeading`、`DialogActions`、`SegmentedControl`。已用于媒体/藏品编辑、合集与子类型管理、设置、同步窗口、连通性窗口和日历中的对应控件。控件保留原生按钮行为、关闭可访问名称、禁用状态与 `aria-pressed`。
+- `app/yuehua-components.css` 集中按钮/危险操作/焦点/选中状态令牌，旧二级页面也消费相同令牌。原有 `YuehuaMotion` 继续管理选中高亮；没有新增轮询或自动加载收藏。
+- 迁移 `0026_agent_operation_recovery.sql` 仅为 `agent_operations` 增加 `request_hash`、`retry_safe`、`started_at`。历史行默认不能重跑，无摘要历史回执仍兼容重放。
+- 请求摘要包含方法、路径、排序后的查询参数、资源、操作、目标 ID 与规范化 JSON；只存 SHA-256。音乐封面以条目/标题/文件 ID 的摘要作为稳定文件身份，临时下载地址变化不使同一文件重试冲突。画廊上传包含文件 hash、来源及封面标记。超过 160 字符的键拒绝，不截断。
+- 只有明确在持久写入前失败才可设置 `retrySafe`。音乐封面的服务/下载/转换阶段临时故障和画廊 Images 缺失已接入；未知 D1/R2 写入结果不会自动恢复执行。安全重试等待 5 秒，使用条件更新领取同一记录，成功回执不可被后续错误覆盖。
+- 102 状态超过 10 分钟会报告 `uncertain`，不删除锁、不自动重跑；原执行者仍可完成回执。`GET /api/agent/operations` 只返回当前用户及当前 Agent 的指定键状态和下一步建议。
+- 大回执不再直接截断 JSON；超过上限返回明确的核对提示，避免错误重放。ChatGPT 内容工具仅转发固定错误码、布尔重试标记与固定等待时间，不返回签名地址或原始文件引用。
+- 新增隔离测试涵盖摘要冲突、查询参数冲突、键长度、历史回执、超时、Agent 隔离、四请求并发恢复、成功回执保护、大回执和 MCP 封面故障恢复。上线状态以对应 PR、Actions 与实际生产验证为准。

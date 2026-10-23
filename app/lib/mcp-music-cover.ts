@@ -30,7 +30,7 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
   if (existing.title !== body.expectedTitle) return agentJson({ error: "音乐标题不匹配" }, 409);
   const fingerprint = await hash(JSON.stringify([body.id, body.expectedTitle, body.file.file_id]));
   const reservation = await reserveAgentOperation(identity, {
-    request, body: { idempotencyKey: body.idempotencyKey }, resource: "music_cover", action: "upload", resourceId: body.id,
+    request, body: { idempotencyKey: body.idempotencyKey, fingerprint }, resource: "music_cover", action: "upload", resourceId: body.id,
   });
   if (reservation.kind !== "reserved") {
     if (reservation.kind === "replayed") {
@@ -98,9 +98,10 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
     const downloadReason = error instanceof Error && "reason" in error
       && (error.reason === "download_network_error" || error.reason === "download_redirect_error") ? error.reason : undefined;
     const reason = reasons[message] ?? downloadReason ?? (upstreamStatus ? "download_http_error" : "operation_failed");
-    const payload = { error: "封面上传未完成，请读取条目核对", code: "music_cover_upload_failed",
-      stage, reason, ...(upstreamStatus ? { upstreamStatus } : {}), uploadFingerprint: fingerprint };
-    await finishAgentOperation(reservation.id, 502, payload).catch(() => undefined);
+    const retrySafe = ["service", "download", "transform"].includes(stage) && (reason === "images_unavailable" || reason === "download_network_error" || reason === "operation_failed" || upstreamStatus === 429 || (upstreamStatus !== undefined && upstreamStatus >= 500));
+    const payload = { error: retrySafe ? "封面上传暂时失败，可稍后使用原操作编号重试" : "封面上传未完成，请读取条目核对", code: "music_cover_upload_failed",
+      stage, reason, retryable: retrySafe, ...(retrySafe ? { retryAfterSeconds: 5 } : {}), ...(upstreamStatus ? { upstreamStatus } : {}), uploadFingerprint: fingerprint };
+    await finishAgentOperation(reservation.id, 502, payload, { retrySafe }).catch(() => undefined);
     return agentJson(payload, 502);
   }
 }
