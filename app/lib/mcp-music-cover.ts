@@ -6,6 +6,7 @@ import { authenticateAgent, isAgentIdentity } from "./agent-auth";
 import { agentJson, finishAgentOperation, reserveAgentOperation } from "./agent-operations";
 import { normalizeMediaMetadata } from "./constants";
 import { chatGPTFileUrl, downloadCoverImage, transformCoverImage, type CoverImagesBinding } from "./mcp-file-image";
+import { duplicateUploadWarning, findUploadDuplicate } from "./upload-duplicates";
 
 async function hash(value: string | Uint8Array) {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
@@ -49,9 +50,16 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
     if (!processImage && !images) throw new Error("封面转换服务不可用");
     stage = "download";
     const input = await downloadCoverImage(fileUrl, body.file.mime_type);
+    stage = "duplicate_check";
+    const imageHash = await hash(input.bytes);
+    const match = await findUploadDuplicate(identity.userKey, imageHash, body.id);
+    if (match?.existingId === body.id && match.image === existing.image) {
+      const payload = { ok: true, id: body.id, image: existing.image, imageHash, uploadFingerprint: fingerprint, ...duplicateUploadWarning(match, true) };
+      await finishAgentOperation(reservation.id, 200, payload);
+      return agentJson(payload);
+    }
     stage = "transform";
     const output = processImage ? await processImage(input.bytes) : await transformCoverImage(input.bytes, images!);
-    const imageHash = await hash(input.bytes);
     const payloadBytes = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength) as ArrayBuffer;
     stage = "store";
     await env.BUCKET.put(objectKey, payloadBytes, { httpMetadata: { contentType: "image/webp" } });
@@ -64,7 +72,7 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
     }).where(and(conditions, eq(userSubjects.title, body.expectedTitle), eq(userSubjects.updatedAt, existing.updatedAt))).returning({ id: userSubjects.id });
     if (!saved) throw new Error("音乐条目已被其他操作修改");
     attached = true;
-    const payload = { ok: true, id: body.id, image, imageHash, uploadFingerprint: fingerprint };
+    const payload = { ok: true, id: body.id, image, imageHash, uploadFingerprint: fingerprint, ...(match ? duplicateUploadWarning(match, false) : {}) };
     stage = "confirm";
     await finishAgentOperation(reservation.id, 200, payload);
     return agentJson(payload);
