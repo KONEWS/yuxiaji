@@ -115,7 +115,7 @@ function defineTool(name: string, title: string, description: string, inputSchem
   };
 }
 
-const musicCoverTool = defineTool("upload_music_cover", "上传音乐封面", "Upload a user-provided JPEG, PNG or WebP file as the cover of one existing music record. First read its internal ID and title and supply expectedTitle. Accepts only ChatGPT file references, up to 20 MiB; creates a display image and verifies the saved cover. Reuse the same idempotencyKey on retries. Does not import archives or fetch arbitrary image URLs.", schema({
+const musicCoverTool = defineTool("upload_music_cover", "上传音乐封面", "Upload a user-provided JPEG, PNG or WebP file as the cover of one existing music record. First read its internal ID and title and supply expectedTitle. Accepts only ChatGPT file references, up to 20 MiB; creates a display image and verifies the saved cover. Reuse the same idempotencyKey on retries. Always report duplicate_file warnings to the user: skipped=true preserves the existing cover; skipped=false saves for the requested target despite a match elsewhere. Does not import archives or fetch arbitrary image URLs.", schema({
   id: idField, expectedTitle: text(160, 1), idempotencyKey: keyField,
   file: { type: "object", properties: {
     download_url: text(8192, 1), file_id: text(200, 1), mime_type: text(100), file_name: text(255),
@@ -241,7 +241,7 @@ async function readResponse(response: Response, writing = false): Promise<JsonOb
   if (!response.ok || !payload || Object.hasOwn(payload, "error")) {
     const status = response.ok ? 502 : response.status;
     if (writing && payload?.code === "music_cover_upload_failed") {
-      const stages = ["service", "download", "transform", "store", "attach", "confirm"];
+      const stages = ["service", "download", "duplicate_check", "transform", "store", "attach", "confirm"];
       const reasons = ["images_unavailable", "image_too_large", "empty_image", "invalid_image", "mime_mismatch", "invalid_output", "record_changed", "download_http_error", "download_network_error", "download_redirect_error", "operation_failed"];
       const data: JsonObject = {};
       if (typeof payload.stage === "string" && stages.includes(payload.stage)) data.stage = payload.stage;
@@ -436,7 +436,15 @@ export async function executeContentTool(
       const payload = await readResponse(await invoke("/internal/content/music-cover", "POST", { ...input, idempotencyKey: key }), true);
       const saved = await getMedia(id, invoke);
       if (saved.image !== payload.image || saved.type !== "music") throw new ToolFailure("write_unconfirmed", "封面已处理，但回读结果不一致，请读取条目后核对。", 502);
-      return success({ media: mediaDetail(saved), imageHash: payload.imageHash });
+      const warnings = records(payload.warnings).filter((warning) => warning.code === "duplicate_file").map((warning) => ({
+        code: "duplicate_file", match: "sha256",
+        message: payload.skipped === true ? "检测到相同文件，已跳过重复保存并保留现有封面。" : "其他位置已上传相同文件，本次仍按指定音乐保存；请向用户提示重复。",
+        ...(positiveId(warning.existingId) ? { existingId: warning.existingId } : {}),
+        ...(positiveId(warning.existingImageId) ? { existingImageId: warning.existingImageId } : {}),
+        ...(positiveId(warning.existingAssetId) ? { existingAssetId: warning.existingAssetId } : {}),
+      }));
+      return success({ media: mediaDetail(saved), imageHash: payload.imageHash,
+        ...(warnings.length ? { duplicate: true, skipped: payload.skipped === true, warnings } : {}) });
     }
     if (name === "list_tags") {
       const payload = await readResponse(await invoke("/api/agent/tags", "GET"));

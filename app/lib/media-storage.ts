@@ -21,6 +21,17 @@ async function userHash(userKey: string) {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+/** Only inspect owned R2 objects; never fetch an external URL for deduplication. */
+export async function mediaAssetExists(value: unknown, userKey: string) {
+  const key = await mediaAssetObjectKey(value, userKey);
+  return key ? Boolean(await env.BUCKET.head(key)) : false;
+}
+
+export async function mediaAssetObjectKey(value: unknown, userKey: string) {
+  const version = versionFromUrl(value);
+  return version ? `media-assets/${await userHash(userKey)}/gallery/${version}` : null;
+}
+
 /** Delete a thumbnail previously uploaded through /api/media-assets. */
 export async function deleteMediaAsset(value: unknown, userKey: string) {
   const version = versionFromUrl(value);

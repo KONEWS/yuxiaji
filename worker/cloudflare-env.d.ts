@@ -24,6 +24,7 @@ interface R2Object {
 }
 
 interface R2Bucket {
+  head(key: string): Promise<{ size: number } | null>;
   get(key: string): Promise<R2Object | null>;
   put(key: string, value: ReadableStream | ArrayBuffer | string | Blob, options?: { httpMetadata?: { contentType?: string } }): Promise<void>;
 }

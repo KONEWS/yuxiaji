@@ -61,6 +61,8 @@
 - 使用月下集管理员账户完成一次登录授权，不把现有 Agent Token 交给 ChatGPT。授权可在 `/connect/chatgpt/manage` 撤销，写入以 `chatgpt` 身份单独审计。
 - ChatGPT 需手动创建并安装自定义 MCP 插件。服务器地址、权限说明及使用示例见 [内容插件安装说明](docs/CHATGPT_CONTENT_PLUGIN.md)。
 - 音乐封面可通过专用 `upload_music_cover` 工具接收 ChatGPT 附图，按条目 ID 与标题核对后转换为展示图并存入 R2；需 `content:write`。不接受 ZIP 或任意外部下载地址，新版部署后需重新扫描工具。
+- Agent 画廊上传与 ChatGPT 音乐封面上传共用文件内容 SHA-256 查重，跨 Nova/Hikari/Codex/ChatGPT，且仅查询当前用户。重复响应带 `duplicate: true`、`skipped` 和 `warnings[].code: "duplicate_file"`，调用方必须向用户说明。当前条目已有相同图片时跳过重复保存；不同条目或独立上传仍按原目标保存并警告，不自动合并、删除或共用文件。源文件相同但改名也能识别；视觉相似、重新压缩后的不同文件不算精确重复。
+- 查重利用现有画廊 hash 与成功上传回执，并核对 R2 对象仍存在；不需要新增数据库迁移。缺失的画廊展示文件会恢复原地址并返回 `restored: true`，不误报跳过。历史无 hash/回执的图片、浏览器上传入口和 OpenClaw 网盘原图不在本次文件查重范围；网站不能检查外部网盘实际文件。检测发生在上传时，不增加页面轮询或自动刷新。
 
 ## 运行环境
 

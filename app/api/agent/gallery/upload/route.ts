@@ -5,6 +5,8 @@ import { userSubjectImages, userSubjects } from "../../../../../db/schema";
 import { authenticateAgent, isAgentIdentity, requireAgentPermission } from "../../../../lib/agent-auth";
 import { agentJson, finishAgentOperation, reserveAgentOperation } from "../../../../lib/agent-operations";
 import { appendGalleryImage, presentGalleryImage } from "../../../../lib/gallery-images";
+import { duplicateUploadWarning, findUploadDuplicate } from "../../../../lib/upload-duplicates";
+import { mediaAssetObjectKey } from "../../../../lib/media-storage";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
 const MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024;
@@ -59,12 +61,17 @@ async function imageHash(bytes: Uint8Array) {
   return Array.from(new Uint8Array(digest)).map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
-function responsePayload(identity: { agent: string }, assetId: number, objectKey: string, galleryId: number | null, thumbnailUrl: string, hash: string) {
+function responsePayload(identity: { agent: string }, assetId: number | null, objectKey: string, galleryId: number | null, thumbnailUrl: string, hash: string) {
   const asset = { assetId, ...(galleryId ? { galleryId } : {}), thumbnailUrl, thumbnail: thumbnailUrl, objectKey, imageHash: hash, contentType: "image/webp" };
   return { ok: true, source: "openclaw", agent: identity.agent, assetId, ...(galleryId ? { galleryId } : {}), thumbnailUrl, objectKey, imageHash: hash, asset };
 }
 
-export async function POST(request: Request) {
+function assetIdFromUrl(url: string) {
+  const version = new URL(url, "https://local.invalid").searchParams.get("v");
+  return version && /^\d+$/.test(version) ? Number(version) : null;
+}
+
+export async function uploadGalleryImage(request: Request, images = (env as RuntimeEnv).IMAGES) {
   const identity = authenticateAgent(request);
   if (!isAgentIdentity(identity)) return identity;
 
@@ -133,7 +140,20 @@ export async function POST(request: Request) {
   let objectKey = "";
   const thumbnailUrl = `/api/media-assets?v=${reservation.id}`;
   try {
-    const images = (env as RuntimeEnv).IMAGES;
+    const match = await findUploadDuplicate(identity.userKey, hash, galleryId);
+    if (galleryId && match?.existingId === galleryId && match.existingImageId) {
+      const attached = await appendGalleryImage(getDb(), identity.userKey, galleryId, {
+        thumbnail: match.image, imageHash: hash,
+        isCover: String(form.get("isCover") || "").toLowerCase() === "true",
+      });
+      const payload = {
+        ...responsePayload(identity, assetIdFromUrl(attached.image.thumbnail), "", galleryId, attached.image.thumbnail, hash),
+        ...duplicateUploadWarning(match, true),
+        galleryImage: presentGalleryImage(attached.image), images: attached.images.map(presentGalleryImage),
+      };
+      await finishAgentOperation(reservation.id, 200, payload);
+      return agentJson(payload);
+    }
     if (!images) {
       const payload = { error: "Cloudflare Images 绑定不可用，暂时无法生成缩略图", retryable: true, retryAfterSeconds: 5 };
       await finishAgentOperation(reservation.id, 503, payload, { retrySafe: true });
@@ -157,16 +177,26 @@ export async function POST(request: Request) {
         isCover: String(form.get("isCover") || "").toLowerCase() === "true",
       })
       : null;
-    const duplicate = Boolean(attached && attached.image.thumbnail !== thumbnailUrl);
+    const duplicate = Boolean(attached?.duplicate);
+    let restored = false;
     if (duplicate) {
+      const previousKey = await mediaAssetObjectKey(attached!.image.thumbnail, identity.userKey);
+      if (previousKey && !await env.BUCKET.head(previousKey)) {
+        // A historical image row can outlive its R2 object. Repair that URL
+        // instead of deleting the fresh upload and returning a broken image.
+        await env.BUCKET.put(previousKey, thumbnailBytes, { httpMetadata: { contentType: "image/webp" } });
+        restored = true;
+      }
       const bucket = env.BUCKET as unknown as { delete?: (key: string) => Promise<void> };
       await bucket.delete?.(objectKey);
       objectKey = "";
     }
     const responseUrl = attached?.image.thumbnail || thumbnailUrl;
     const payload = {
-      ...responsePayload(identity, reservation.id, objectKey, galleryId, responseUrl, hash),
-      ...(duplicate ? { duplicate: true } : {}),
+      ...responsePayload(identity, assetIdFromUrl(responseUrl), objectKey, galleryId, responseUrl, hash),
+      ...(duplicate && attached ? duplicateUploadWarning({ existingId: galleryId, existingImageId: attached.image.id, image: attached.image.thumbnail }, !restored)
+        : match ? duplicateUploadWarning(match, false) : {}),
+      ...(restored ? { restored: true, warnings: [{ code: "duplicate_file", match: "sha256", existingId: galleryId, message: "检测到相同文件，但原展示文件缺失，已恢复原图片地址。" }] } : {}),
       ...(attached ? { galleryImage: presentGalleryImage(attached.image), images: attached.images.map(presentGalleryImage) } : {}),
     };
     await finishAgentOperation(reservation.id, 201, payload);
@@ -197,4 +227,8 @@ export async function POST(request: Request) {
 
 export function GET() {
   return agentJson({ error: "请使用 POST 上传画廊图片" }, 405, { allow: "POST" });
+}
+
+export function POST(request: Request) {
+  return uploadGalleryImage(request);
 }

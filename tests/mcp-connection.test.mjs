@@ -182,6 +182,143 @@ test("failed music cover downloads leave the existing cover untouched", async ()
     assert.equal(saved.image, media.image);
   }
 });
+
+test("renamed identical music files warn without replacing the cover, resetting crop or creating another object", async () => {
+  const media = successful(await call("create_media", { type: "music", title: "Duplicate cover", idempotencyKey: "duplicate-cover-create" })).media;
+  const base = { id: media.id, expectedTitle: media.title, idempotencyKey: "duplicate-cover-first", file: { file_id: "file-duplicate-first", download_url: "https://files.oaiusercontent.com/fixture.webp", file_name: "first.webp" } };
+  const first = successful(await call("upload_music_cover", base));
+  successful(await call("update_media", { id: media.id, metadata: { coverZoom: 140 }, idempotencyKey: "duplicate-cover-crop" }));
+  const objectsBefore = await (await fetchLocal("/__test/assets")).json();
+  const transformsBefore = (await (await fetchLocal("/__test/image-downloads")).json()).transforms;
+  const repeat = { ...base, idempotencyKey: "duplicate-cover-renamed", file: { ...base.file, file_id: "file-renamed", file_name: "renamed.webp" } };
+  const duplicate = successful(await call("upload_music_cover", repeat));
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.skipped, true);
+  assert.equal(duplicate.warnings[0].code, "duplicate_file");
+  assert.equal(duplicate.warnings[0].existingId, media.id);
+  assert.equal(duplicate.media.image, first.media.image);
+  assert.equal(duplicate.media.metadata.coverZoom, 140);
+  assert.deepEqual(await (await fetchLocal("/__test/assets")).json(), objectsBefore);
+  assert.equal((await (await fetchLocal("/__test/image-downloads")).json()).transforms, transformsBefore);
+  const replay = successful(await call("upload_music_cover", { ...repeat, file: { ...repeat.file, download_url: "https://files.oaiusercontent.com/expired.webp" } }));
+  assert.deepEqual(replay.warnings, duplicate.warnings);
+});
+
+async function galleryUpload(bytes, key, galleryId, token = "test-nova-token", fileName = "image.webp", extra = {}) {
+  const form = new FormData();
+  form.set("image", new Blob([bytes], { type: "image/webp" }), fileName);
+  form.set("idempotencyKey", key);
+  if (galleryId) form.set("galleryId", String(galleryId));
+  for (const [name, value] of Object.entries(extra)) form.set(name, String(value));
+  const request = new Request("http://localhost/api/agent/gallery/upload", { method: "POST", body: form });
+  const response = await fetchLocal("/api/agent/gallery/upload", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": request.headers.get("content-type") }, body: await request.arrayBuffer() });
+  return { response, body: await response.json() };
+}
+const webpBytes = new Uint8Array([0x52,0x49,0x46,0x46,12,0,0,0,0x57,0x45,0x42,0x50,0x56,0x50,0x38,0x20]);
+
+test("Nova, Hikari, Codex and ChatGPT share exact-file warnings while separate records keep independent assets", async () => {
+  const gallery = successful(await call("create_media", { type: "visual", title: "Agent duplicate gallery", idempotencyKey: "duplicate-gallery-create" })).media;
+  const bytes = new Uint8Array([...webpBytes, 1]);
+  const first = await galleryUpload(bytes, "gallery-original", gallery.id);
+  assert.equal(first.response.status, 201);
+  assert.equal(first.body.duplicate, undefined);
+  const transformsBefore = (await (await fetchLocal("/__test/image-downloads")).json()).transforms;
+  const countBefore = (await (await fetchLocal("/__test/assets")).json()).length;
+  for (const agent of ["hikari", "codex"]) {
+    const duplicate = await galleryUpload(bytes, `gallery-repeat-${agent}`, gallery.id, `test-${agent}-token`, "renamed.webp");
+    assert.equal(duplicate.response.status, 200);
+    assert.equal(duplicate.body.duplicate, true);
+    assert.equal(duplicate.body.skipped, true);
+    assert.equal(duplicate.body.warnings[0].existingId, gallery.id);
+    assert.equal(duplicate.body.thumbnailUrl, first.body.thumbnailUrl);
+    assert.equal(duplicate.body.images.length, 1);
+    const replay = await galleryUpload(bytes, `gallery-repeat-${agent}`, gallery.id, `test-${agent}-token`);
+    assert.equal(replay.response.headers.get("x-idempotent-replay"), "true");
+    assert.deepEqual(replay.body.warnings, duplicate.body.warnings);
+  }
+  assert.equal((await (await fetchLocal("/__test/image-downloads")).json()).transforms, transformsBefore);
+  assert.equal((await (await fetchLocal("/__test/assets")).json()).length, countBefore);
+  const music = successful(await call("create_media", { type: "music", title: "Shared album cover", idempotencyKey: "shared-cover-create" })).media;
+  const cover = successful(await call("upload_music_cover", { id: music.id, expectedTitle: music.title, idempotencyKey: "shared-cover-upload", file: { file_id: "shared-cover", download_url: "https://files.oaiusercontent.com/different.webp?secret=never-echo" } }));
+  assert.equal(cover.duplicate, true);
+  assert.equal(cover.skipped, false);
+  assert.equal(cover.warnings[0].existingId, gallery.id);
+  assert.notEqual(cover.media.image, first.body.thumbnailUrl);
+  assert.ok(!JSON.stringify(cover.warnings).includes("secret"));
+  const otherGallery = successful(await call("create_media", { type: "visual", title: "Other gallery", idempotencyKey: "other-gallery-create" })).media;
+  const other = await galleryUpload(bytes, "other-gallery-upload", otherGallery.id);
+  assert.equal(other.response.status, 201);
+  assert.equal(other.body.duplicate, true);
+  assert.equal(other.body.skipped, false);
+  assert.notEqual(other.body.thumbnailUrl, first.body.thumbnailUrl);
+  // Deleting the original gallery must not remove another record's cover.
+  const deleted = await fetchLocal(`/api/agent/media?id=${gallery.id}`, { method: "DELETE", headers: { authorization: "Bearer test-nova-token", "idempotency-key": "delete-duplicate-gallery" } });
+  assert.equal(deleted.status, 200);
+  assert.equal((await fetchLocal(cover.media.image)).status, 200);
+  assert.equal((await fetchLocal(other.body.thumbnailUrl)).status, 200);
+});
+
+test("standalone uploads warn across agents, ignore deleted objects and do not match filenames alone", async () => {
+  const bytes = new Uint8Array([...webpBytes, 3]);
+  const first = await galleryUpload(bytes, "standalone-first", null);
+  assert.equal(first.response.status, 201);
+  assert.equal(first.body.duplicate, undefined);
+  const different = await galleryUpload(new Uint8Array([...webpBytes, 4]), "standalone-different", null);
+  assert.equal(different.body.duplicate, undefined);
+  const second = await galleryUpload(bytes, "standalone-second", null, "test-codex-token", "renamed.webp");
+  assert.equal(second.body.duplicate, true);
+  assert.equal(second.body.skipped, false);
+  assert.equal(second.body.warnings[0].existingAssetId, first.body.assetId);
+  assert.notEqual(first.body.thumbnailUrl, second.body.thumbnailUrl);
+  await jsonRequest("/__test/delete-asset", { key: first.body.objectKey });
+  await jsonRequest("/__test/delete-asset", { key: second.body.objectKey });
+  const afterDeletion = await galleryUpload(bytes, "standalone-after-delete", null);
+  assert.equal(afterDeletion.body.duplicate, undefined);
+});
+
+test("duplicate lookup ignores foreign owners, malformed receipts and failed uploads", async () => {
+  const bytes = new Uint8Array([...webpBytes, 5]);
+  const imageHash = createHash("sha256").update(bytes).digest("hex");
+  const available = await galleryUpload(new Uint8Array([...webpBytes, 6]), "isolation-source", null);
+  await sql([
+    `INSERT INTO agent_operations (user_key,agent,idempotency_key,resource,action,status_code,response_json,created_at) VALUES ('mcp-test-owner','nova','bad-json','gallery_asset','upload',201,'{truncated',1)`,
+    `INSERT INTO agent_operations (user_key,agent,idempotency_key,resource,action,status_code,response_json,created_at) VALUES ('other-owner','nova','foreign-upload','gallery_asset','upload',201,'{"imageHash":"${imageHash}","thumbnailUrl":"${available.body.thumbnailUrl}"}',1)`,
+    `INSERT INTO agent_operations (user_key,agent,idempotency_key,resource,action,status_code,response_json,created_at) VALUES ('mcp-test-owner','nova','failed-upload','gallery_asset','upload',500,'{"imageHash":"${imageHash}","thumbnailUrl":"${available.body.thumbnailUrl}"}',1)`,
+    `INSERT INTO user_subjects (id,user_key,type,title,updated_at) VALUES (990001,'other-owner','visual','Foreign private gallery',1)`,
+    `INSERT INTO user_subject_images (user_key,subject_id,thumbnail,image_hash,created_at,updated_at) VALUES ('other-owner',990001,'${available.body.thumbnailUrl}','${imageHash}',1,1)`,
+  ]);
+  const result = await galleryUpload(bytes, "private-isolation", null);
+  assert.equal(result.response.status, 201);
+  assert.equal(result.body.duplicate, undefined);
+});
+
+test("a missing gallery object is repaired instead of returning a duplicate with a broken URL", async () => {
+  const gallery = successful(await call("create_media", { type: "visual", title: "Missing image", idempotencyKey: "missing-gallery-create" })).media;
+  const bytes = new Uint8Array([...webpBytes, 7]);
+  const first = await galleryUpload(bytes, "missing-gallery-first", gallery.id);
+  await jsonRequest("/__test/delete-asset", { key: first.body.objectKey });
+  assert.equal((await fetchLocal(first.body.thumbnailUrl)).status, 404);
+  const repaired = await galleryUpload(bytes, "missing-gallery-repair", gallery.id);
+  assert.equal(repaired.body.duplicate, true);
+  assert.equal(repaired.body.skipped, false);
+  assert.equal(repaired.body.restored, true);
+  assert.equal(repaired.body.thumbnailUrl, first.body.thumbnailUrl);
+  assert.equal(repaired.body.images.length, 1);
+  assert.equal((await fetchLocal(first.body.thumbnailUrl)).status, 200);
+});
+
+test("old music upload receipts cannot cause a replacement cover to be skipped", async () => {
+  const media = successful(await call("create_media", { type: "music", title: "Cover changes", idempotencyKey: "cover-change-create" })).media;
+  const base = { id: media.id, expectedTitle: media.title, file: { file_id: "cover-change-file", download_url: "https://files.oaiusercontent.com/fixture.webp" } };
+  const first = successful(await call("upload_music_cover", { ...base, idempotencyKey: "cover-change-first" }));
+  const second = successful(await call("upload_music_cover", { ...base, idempotencyKey: "cover-change-second", file: { file_id: "cover-change-other", download_url: "https://files.oaiusercontent.com/different.webp" } }));
+  assert.notEqual(second.media.image, first.media.image);
+  const again = successful(await call("upload_music_cover", { ...base, idempotencyKey: "cover-change-third" }));
+  assert.notEqual(again.skipped, true);
+  assert.notEqual(again.media.image, first.media.image);
+  assert.notEqual(again.media.image, second.media.image);
+  assert.equal(again.imageHash, first.imageHash);
+});
 test("temporary cover download failure retries the same operation without duplicating or leaking file URLs", async () => {
   const media = successful(await call("create_media", { type: "music", title: "Recover cover", idempotencyKey: "recover-cover-create" })).media;
   const base = { id: media.id, expectedTitle: media.title, idempotencyKey: "recover-cover", file: { file_id: "file-recover", download_url: "https://files.oaiusercontent.com/unavailable.webp" } };
@@ -445,6 +582,7 @@ test("stable write keys replay the same content operation without duplicate rows
 
 test("content schemas reject media-type aliases, images, arbitrary URLs, code, and unknown fields", async () => {
   const beforeCount = (await query("SELECT COUNT(*) AS count FROM user_subjects"))[0].count;
+  const beforeImageCount = (await query("SELECT COUNT(*) AS count FROM user_subject_images"))[0].count;
   const invalid = [
     { type: "not-a-media-type" }, { mediaType: "music" }, { images: ["https://evil.invalid/image"] },
     { url: "https://evil.invalid/arbitrary" }, { endpoint: "/api/state" }, { code: "DROP TABLE user_subjects" },
@@ -454,7 +592,7 @@ test("content schemas reject media-type aliases, images, arbitrary URLs, code, a
     toolDenied(await call("create_media", { type: "music", title: "Schema denial", idempotencyKey: `invalid-media-${index}`, ...patch }));
   }
   assert.equal((await query("SELECT COUNT(*) AS count FROM user_subjects"))[0].count, beforeCount);
-  assert.equal((await query("SELECT COUNT(*) AS count FROM user_subject_images"))[0].count, 0);
+  assert.equal((await query("SELECT COUNT(*) AS count FROM user_subject_images"))[0].count, beforeImageCount);
 });
 
 test("content reads and updates respect owner boundaries", async () => {
