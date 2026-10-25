@@ -1,0 +1,11 @@
+{
+  "name": "yuexiaji-preferences-sync-test",
+  "main": "preferences-sync-worker.mjs",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DEFAULT_USER_ID": "preferences-sync-test-owner",
+    "YUEXIAJI_CREDENTIALS_ENCRYPTION_KEY": "isolated-preferences-sync-test-key"
+  },
+  "d1_databases": [{ "binding": "DB", "database_name": "preferences-sync-test", "database_id": "00000000-0000-0000-0000-000000000004" }]
+}

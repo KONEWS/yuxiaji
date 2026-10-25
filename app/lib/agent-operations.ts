@@ -3,6 +3,10 @@ import { getDb } from "../../db";
 import { agentOperations } from "../../db/schema";
 import type { AgentIdentity } from "./agent-auth";
 
+// Operation storage also protects browser creates. This does not grant browser
+// callers an Agent identity or access to the Agent authentication/read routes.
+type OperationIdentity = AgentIdentity | { agent: "browser"; userKey: string; source: "browser" };
+
 type OperationInput = {
   request: Request;
   body?: Record<string, unknown>;
@@ -58,7 +62,7 @@ async function requestHash(input: OperationInput) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function conditions(identity: AgentIdentity, key: string) {
+function conditions(identity: OperationIdentity, key: string) {
   return and(eq(agentOperations.userKey, identity.userKey), eq(agentOperations.agent, identity.agent), eq(agentOperations.idempotencyKey, key));
 }
 
@@ -73,7 +77,7 @@ function pendingResponse(operation?: Operation): OperationResponse {
   }, { status: 409, headers: { ...Object.fromEntries(responseHeaders()), ...(stale ? {} : { "retry-after": String(RETRY_AFTER_SECONDS) }) } }) };
 }
 
-export async function reserveAgentOperation(identity: AgentIdentity, input: OperationInput): Promise<AgentOperationReservation> {
+export async function reserveAgentOperation(identity: OperationIdentity, input: OperationInput): Promise<AgentOperationReservation> {
   const idempotencyKey = readAgentIdempotencyKey(input);
   if (!idempotencyKey || idempotencyKey.length > 160) return { kind: "invalid", response: agentJson({ error: "写操作需要 1–160 字符的 idempotencyKey" }, 400) };
   const hash = await requestHash(input);

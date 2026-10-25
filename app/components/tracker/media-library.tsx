@@ -5,6 +5,7 @@ import { highResCoverUrl } from "../../lib/client-api";
 import { mediaMeta, mediaSettings, primaryStatusMeta, secondaryStatusMeta, week } from "../../lib/tracker-data";
 import { isCollectionMediaType, normalizeMediaType, tagDisplayName, type TagPreferences, type VideoSubtypeLabels, type VisualSubtypeLabels } from "../../lib/constants";
 import { formatAiringCountdown, formatWeekday, isLongRunningSchedule } from "../../lib/anime-airing-time";
+import { isTrackedCalendarEntry } from "../../lib/calendar-tracking";
 import { normalizeMediaImages, type AiringSchedule, type Anime, type CalendarDay, type CalendarEntry, type LayoutMode, type MediaTab, type MediaType, type SortMode, type Status, type TagEntry, type WeekDay } from "../../lib/tracker-types";
 import { CoverImage, Rating, RoundedSelect, coverPositionStyle } from "./common";
 import { TagManagerModal } from "./media-modals";
@@ -86,13 +87,14 @@ function CalendarPoster({ item }: { item: CalendarEntry }) {
   return <CoverImage key={src} className="calendar-poster" src={src} alt={`${item.title}封面`} placeholder={item.title.slice(0, 1)} />;
 }
 
-export function WeeklyCalendar({ open, toggle, titleMode, airingSchedules }: { open: (day: CalendarDay) => void; toggle: (item: CalendarEntry) => void; titleMode: string; airingSchedules?: AiringSchedule[] }) {
+export function WeeklyCalendar({ open, toggle, titleMode, airingSchedules, anime }: { open: (day: CalendarDay) => void; toggle: (item: CalendarEntry) => void; titleMode: string; airingSchedules?: AiringSchedule[]; anime: Anime[] }) {
   const [activeDay, setActiveDay] = useState<WeekDay>("五");
   const liveEntries = airingSchedules?.map((item) => {
     const images = item.metadata?.images;
     const image = images && typeof images === "object" ? (images as Record<string, unknown>).large || (images as Record<string, unknown>).common || (images as Record<string, unknown>).medium : "";
     const sourceIds = item.metadata?.sourceIds && typeof item.metadata.sourceIds === "object" ? Object.fromEntries(Object.entries(item.metadata.sourceIds).map(([key, value]) => [key, String(value)])) : undefined;
-    return { title: item.title, jp: item.jpTitle, subjectId: item.subjectId, sourceIds, coverQuery: item.jpTitle || item.title, coverUrl: typeof image === "string" ? image.replace(/^http:\/\//i, "https://") : undefined, meta: `${item.airTime || "时间待定"} · 下一集 ${item.nextEpisode ?? "待定"}`, followed: item.isCollected, source: item.source === "bangumi" ? "Bangumi" : item.source, day: formatWeekday(item.weekday) as WeekDay, long: isLongRunningSchedule(item.metadata, item.nextEpisode) };
+    const entry: CalendarEntry = { title: item.title, jp: item.jpTitle, subjectId: item.subjectId, sourceIds, coverQuery: item.jpTitle || item.title, coverUrl: typeof image === "string" ? image.replace(/^http:\/\//i, "https://") : undefined, meta: `${item.airTime || "时间待定"} · 下一集 ${item.nextEpisode ?? "待定"}`, followed: false, source: item.source === "bangumi" ? "Bangumi" : item.source, day: formatWeekday(item.weekday) as WeekDay, long: isLongRunningSchedule(item.metadata, item.nextEpisode) };
+    return { ...entry, followed: isTrackedCalendarEntry(entry, anime) };
   }) || [];
   const mini = liveEntries.filter((item) => item.day === activeDay).slice(0, 5);
   return <aside className="schedule-panel"><div className="schedule-title"><div><p>星期{activeDay}</p><h2>放送更新</h2></div><button onClick={() => open("all")}>查看全部 <span>→</span></button></div><div className="week-strip">{week.map((day) => <button key={day} className={day === activeDay ? "active" : ""} onClick={() => setActiveDay(day as WeekDay)} aria-pressed={day === activeDay}><b>{day}</b></button>)}</div><div className="schedule-list">{mini.map((item) => <div key={`${item.source}:${item.subjectId ?? item.title}:${item.day}`} className={`schedule-row ${item.followed ? "current" : ""}`}><button className="schedule-open" onClick={() => open(activeDay)}><CalendarPoster item={item} /><span><b>{titleMode === "jp" && item.jp ? item.jp : item.title}</b><small>{item.meta.split("·").slice(0, 2).join("·")}</small></span></button><button className="schedule-add" onClick={() => toggle(item)} aria-label={item.followed ? `取消追更${item.title}` : `追番${item.title}`} title={item.followed ? "再次点击取消追更" : "加入追更"}>{item.followed ? "✓" : "＋"}</button></div>)}</div></aside>;
@@ -221,5 +223,5 @@ export function MediaLibrary(props: MediaLibraryProps) {
         ? <MusicListRow key={item.id} item={item} titleMode={props.titleMode} onDetails={props.onDetails} selectionMode={selectionMode} selected={selectedIds.has(item.id)} onSelect={toggleSelection} />
         : <AnimeCard key={item.id} item={item} layout={layout} onAdjust={props.onAdjust} onDetails={props.onDetails} onRate={props.onRate} titleMode={props.titleMode} visualSubtypeLabels={props.visualSubtypeLabels} videoSubtypeLabels={props.videoSubtypeLabels} airingBySubjectId={props.airingBySubjectId} selectionMode={selectionMode} selected={selectedIds.has(item.id)} onSelect={toggleSelection} />)}
       {!props.visibleAnime.length && <div className="empty-state"><b>这里暂时没有收藏</b><p>可以调整筛选条件，或者添加一个新条目。</p><button onClick={props.openAdd}>添加收藏</button></div>}
-    </div></div><WeeklyCalendar open={props.openCalendar} toggle={props.toggleCalendarTracking} titleMode={props.titleMode} airingSchedules={props.airingSchedules} /></section>{tagManagerOpen && <TagManagerModal entries={tagCounts} activeTags={props.activeTags} setActiveTags={props.setActiveTags} close={() => setTagManagerOpen(false)} setPreferences={props.setTagPreferences} />}</>;
+    </div></div><WeeklyCalendar open={props.openCalendar} toggle={props.toggleCalendarTracking} titleMode={props.titleMode} airingSchedules={props.airingSchedules} anime={props.anime} /></section>{tagManagerOpen && <TagManagerModal entries={tagCounts} activeTags={props.activeTags} setActiveTags={props.setActiveTags} close={() => setTagManagerOpen(false)} setPreferences={props.setTagPreferences} />}</>;
 }

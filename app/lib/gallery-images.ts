@@ -3,6 +3,7 @@ import { getDb } from "../../db";
 import { userSubjectImages, userSubjects } from "../../db/schema";
 import { deleteMediaAsset } from "./media-storage";
 import { groupGalleryImageRows, normalizeGallerySubjectIds, queryGalleryImageBatches } from "./gallery-image-batches";
+import type { MediaWriteQuery } from "./media-revisions";
 
 export const MAX_GALLERY_IMAGES = 60;
 
@@ -213,6 +214,45 @@ export async function syncGalleryImages(db: Database, userKey: string, subjectId
   ));
   await removeUnusedAssets(db, userKey, removed.map((row) => row.thumbnail));
   return galleryImagesForSubject(db, userKey, subjectId);
+}
+
+/** Plan the browser's explicit image replacement without executing any writes.
+ * The caller commits this together with its media snapshot guard in one D1
+ * batch, so an Agent append cannot be mistaken for an intentional deletion.
+ */
+export function planGalleryImageSync(db: Database, userKey: string, subjectId: number, value: unknown, existing: GalleryImageRow[]) {
+  const images = sanitizeGalleryImages(value);
+  if (!images) throw new Error("images 必须是数组");
+  const existingById = new Map(existing.map((row) => [row.id, row]));
+  const existingByUrl = new Map(existing.map((row) => [row.thumbnail, row]));
+  const retainedIds = new Set<number>();
+  const writes: MediaWriteQuery[] = [];
+  const now = new Date();
+  for (const image of images) {
+    const byId = image.id ? existingById.get(image.id) : undefined;
+    const match = byId?.thumbnail === image.thumbnail ? byId : existingByUrl.get(image.thumbnail);
+    const values = {
+      sourceUrl: image.sourceUrl, imageHash: image.imageHash, sortOrder: image.sortOrder,
+      isCover: image.isCover, width: image.width, height: image.height, mime: image.mime, updatedAt: now,
+    };
+    if (match) {
+      retainedIds.add(match.id);
+      writes.push(db.update(userSubjectImages).set(values).where(and(
+        eq(userSubjectImages.id, match.id), eq(userSubjectImages.userKey, userKey), eq(userSubjectImages.subjectId, subjectId),
+      )));
+    } else {
+      writes.push(db.insert(userSubjectImages).values({ ...values, userKey, subjectId, thumbnail: image.thumbnail, createdAt: now }));
+    }
+  }
+  const removed = existing.filter((row) => !retainedIds.has(row.id));
+  if (removed.length) writes.push(db.delete(userSubjectImages).where(and(
+    eq(userSubjectImages.userKey, userKey), eq(userSubjectImages.subjectId, subjectId),
+    inArray(userSubjectImages.id, removed.map((row) => row.id)),
+  )));
+  writes.push(db.update(userSubjects).set({
+    thumbnail: images.find((image) => image.isCover)?.thumbnail || images[0]?.thumbnail || "", updatedAt: now,
+  }).where(and(eq(userSubjects.id, subjectId), eq(userSubjects.userKey, userKey), eq(userSubjects.type, "visual"))));
+  return { writes, removedUrls: removed.map((row) => row.thumbnail) };
 }
 
 export async function appendGalleryImage(db: Database, userKey: string, subjectId: number, value: unknown) {

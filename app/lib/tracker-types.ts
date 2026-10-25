@@ -74,6 +74,7 @@ export function normalizeMediaImages(value: unknown, fallback = ""): MediaImage[
 
 export type Anime = {
   id: number;
+  revision?: string;
   title: string;
   jp: string;
   note: string;

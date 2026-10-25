@@ -1,0 +1,292 @@
+import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
+import { after, before, test } from "node:test";
+import wrangler from "wrangler";
+
+const { unstable_splitSqlQuery: splitSqlQuery, unstable_dev } = wrangler;
+const owner = "media-conflicts-owner";
+let worker;
+
+async function api(method = "GET", body, path = "/api/media", headers = {}) {
+  const response = await worker.fetch(path, {
+    method, headers: { "content-type": "application/json", ...headers },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  return { status: response.status, body: await response.json(), replayed: response.headers.get("x-idempotent-replay") === "true" };
+}
+
+async function sql(statements) {
+  const result = await api("POST", statements, "/__test/sql");
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  return result.body.results;
+}
+
+async function asset(url, create = false) {
+  const result = await api(create ? "POST" : "GET", undefined, `/__test/asset?url=${encodeURIComponent(url)}`);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  return result.body.exists;
+}
+
+async function create(fields = {}) {
+  const result = await api("POST", {
+    mediaType: "anime", title: "Revision test", total: 12, progress: 3, status: "watching", ...fields,
+  });
+  assert.equal(result.status, 201, JSON.stringify(result.body));
+  assert.equal(typeof result.body.subject.revision, "string");
+  assert.ok(result.body.subject.revision.length >= 32);
+  return result.body.subject;
+}
+
+async function read(id) {
+  const result = await api();
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  return result.body.subjects.find((subject) => subject.id === id);
+}
+
+function conflict(result) {
+  assert.equal(result.status, 409, JSON.stringify(result.body));
+  assert.equal(result.body.code, "media_conflict");
+}
+
+before(async () => {
+  worker = await unstable_dev("tests/fixtures/media-conflicts-worker.mjs", {
+    config: "tests/fixtures/media-conflicts-wrangler.jsonc", envFiles: ["tests/fixtures/.env.test"], persist: false, local: true, logLevel: "error",
+    experimental: { disableExperimentalWarning: true, disableDevRegistry: true, showInteractiveDevSession: false, testMode: true, watch: false },
+  });
+  const migrations = (await readdir("drizzle")).filter((name) => name.endsWith(".sql")).sort();
+  for (const name of migrations) await sql(splitSqlQuery(await readFile(`drizzle/${name}`, "utf8")));
+});
+
+after(async () => { await worker?.stop(); });
+
+test("browser revisions describe the returned content and remain stable until an edit", async () => {
+  const created = await create({ title: "Stable revision", globalScore: 8.5 });
+  const firstRead = await read(created.id);
+  assert.equal(firstRead.revision, created.revision);
+  assert.equal((await read(created.id)).revision, created.revision);
+  const edited = await api("POST", { id: created.id, expectedRevision: created.revision, note: "new note" });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.subject.note, "new note");
+  assert.equal(edited.body.subject.progress, 3);
+  assert.notEqual(edited.body.subject.revision, created.revision);
+  assert.equal((await read(created.id)).revision, edited.body.subject.revision);
+});
+
+test("opening a detail reads only the requested owned record", async () => {
+  const created = await create({ title: "Detail read" });
+  const result = await api("GET", undefined, `/api/media?id=${created.id}`);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.subjects.length, 1);
+  assert.equal(result.body.subjects[0].id, created.id);
+  assert.equal(result.body.subjects[0].revision, created.revision);
+  assert.deepEqual((await api("GET", undefined, "/api/media?id=999999999")).body.subjects, []);
+  assert.equal((await api("GET", undefined, "/api/media?id=invalid")).status, 400);
+});
+
+test("same-timestamp server edits invalidate old browser updates without overwriting them", async () => {
+  const original = await create({ title: "Server update", note: "old" });
+  await sql([`UPDATE user_subjects SET note='Agent note' WHERE id=${original.id} AND user_key='${owner}'`]);
+  const remote = await read(original.id);
+  assert.equal(remote.updatedAt, original.updatedAt);
+  assert.notEqual(remote.revision, original.revision);
+  conflict(await api("POST", { id: original.id, expectedRevision: original.revision, title: "stale title", note: "old" }));
+  const after = await read(original.id);
+  assert.equal(after.title, "Server update");
+  assert.equal(after.note, "Agent note");
+  assert.equal(after.revision, remote.revision);
+});
+
+test("an Agent image appended in the same millisecond survives stale title, score, and image-list saves", async () => {
+  const imageA = "/api/media-assets?v=conflict_image_A_0001";
+  const imageB = "/api/media-assets?v=conflict_image_B_0001";
+  await asset(imageA, true);
+  await asset(imageB, true);
+  const original = await create({ mediaType: "visual", title: "Append race", images: [{ thumbnail: imageA, isCover: true }] });
+  await sql([`INSERT INTO user_subject_images (user_key,subject_id,thumbnail,sort_order,is_cover,created_at,updated_at) VALUES ('${owner}',${original.id},'${imageB}',1,0,${original.updatedAt},${original.updatedAt})`]);
+  const remote = await read(original.id);
+  assert.equal(remote.updatedAt, original.updatedAt);
+  assert.equal(remote.images.length, 2);
+  assert.notEqual(remote.revision, original.revision);
+  for (const edit of [{ title: "stale title" }, { score: 9 }, { title: "stale title", images: original.images }]) {
+    conflict(await api("POST", { id: original.id, expectedRevision: original.revision, ...edit }));
+    assert.equal(await asset(imageB), true);
+  }
+  const unchanged = await read(original.id);
+  assert.equal(unchanged.title, "Append race");
+  assert.deepEqual(unchanged.images.map((image) => image.thumbnail), [imageA, imageB]);
+  const refreshed = await api("POST", { id: original.id, expectedRevision: unchanged.revision, title: "Fresh title" });
+  assert.equal(refreshed.status, 200, JSON.stringify(refreshed.body));
+  assert.deepEqual(refreshed.body.subject.images.map((image) => image.thumbnail), [imageA, imageB]);
+  assert.equal(await asset(imageB), true);
+});
+
+test("unversioned legacy image replacement is rejected while legacy partial edits preserve images", async () => {
+  const original = await create({ mediaType: "visual", title: "Legacy browser", images: [{ thumbnail: "/test/legacy-A.webp" }, { thumbnail: "/test/legacy-B.webp" }] });
+  conflict(await api("POST", { id: original.id, title: "unsafe legacy", images: [original.images[0]] }));
+  const edited = await api("POST", { id: original.id, note: "compatible partial edit" });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.subject.title, "Legacy browser");
+  assert.equal(edited.body.subject.note, "compatible partial edit");
+  assert.equal(edited.body.subject.images.length, 2);
+});
+
+test("fresh explicit gallery edits reorder and delete images and clean only the removed asset", async () => {
+  const imageA = "/api/media-assets?v=legitimate_image_A_0001";
+  const imageB = "/api/media-assets?v=legitimate_image_B_0001";
+  await asset(imageA, true);
+  await asset(imageB, true);
+  const original = await create({ mediaType: "visual", images: [{ thumbnail: imageA, isCover: true }, { thumbnail: imageB }] });
+  const reordered = await api("POST", {
+    id: original.id, expectedRevision: original.revision,
+    images: [...original.images].reverse().map((image, index) => ({ ...image, isCover: index === 0 })),
+  });
+  assert.equal(reordered.status, 200, JSON.stringify(reordered.body));
+  assert.deepEqual(reordered.body.subject.images.map((image) => image.thumbnail), [imageB, imageA]);
+  assert.equal(reordered.body.subject.thumbnail, imageB);
+  const removed = await api("POST", {
+    id: original.id, expectedRevision: reordered.body.subject.revision,
+    images: [reordered.body.subject.images[1]],
+  });
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.deepEqual(removed.body.subject.images.map((image) => image.thumbnail), [imageA]);
+  assert.equal(removed.body.subject.thumbnail, imageA);
+  assert.equal(await asset(imageA), true);
+  assert.equal(await asset(imageB), false);
+});
+
+test("concurrent writes with the same revision commit exactly once", async () => {
+  const original = await create({ title: "Concurrent writers", note: "baseline" });
+  const results = await Promise.all(Array.from({ length: 4 }, (_, index) => api("POST", {
+    id: original.id, expectedRevision: original.revision, note: `writer-${index}`,
+  })));
+  const successful = results.filter((result) => result.status === 200);
+  assert.equal(successful.length, 1, JSON.stringify(results));
+  for (const result of results.filter((result) => result.status !== 200)) conflict(result);
+  const stored = await read(original.id);
+  assert.equal(stored.note, successful[0].body.subject.note);
+  assert.equal(stored.revision, successful[0].body.subject.revision);
+});
+
+test("the transactional guard rejects an image appended after the update snapshot was already read", async () => {
+  const original = await create({ mediaType: "visual", title: "Guard boundary", images: [{ thumbnail: "/test/guard-A.webp" }] });
+  const result = await api("POST", { id: original.id, imageUrl: "/test/guard-B.webp" }, "/__test/stale-snapshot");
+  conflict(result);
+  const stored = await read(original.id);
+  assert.equal(stored.title, "Guard boundary");
+  assert.deepEqual(stored.images.map((image) => image.thumbnail), ["/test/guard-A.webp", "/test/guard-B.webp"]);
+  assert.equal(stored.updatedAt, original.updatedAt);
+});
+
+test("a full 60-image gallery supports versioned reorder and deletion within D1 parameter limits", async () => {
+  const original = await create({ mediaType: "visual", title: "Sixty images", images: Array.from({ length: 60 }, (_, index) => ({ thumbnail: `/test/sixty-${index}.webp` })) });
+  assert.equal(original.images.length, 60);
+  const reordered = await api("POST", {
+    id: original.id, expectedRevision: original.revision,
+    images: [...original.images].reverse().map((image, index) => ({ ...image, isCover: index === 0 })),
+  });
+  assert.equal(reordered.status, 200, JSON.stringify(reordered.body));
+  assert.equal(reordered.body.subject.images.length, 60);
+  assert.equal(reordered.body.subject.images[0].thumbnail, "/test/sixty-59.webp");
+  const reduced = await api("POST", { id: original.id, expectedRevision: reordered.body.subject.revision, images: [reordered.body.subject.images[0]] });
+  assert.equal(reduced.status, 200, JSON.stringify(reduced.body));
+  assert.equal(reduced.body.subject.images.length, 1);
+});
+
+test("revisions do not grant access to another owner's media", async () => {
+  await sql(["INSERT INTO user_subjects (id,user_key,type,title,updated_at) VALUES (900001,'another-owner','visual','Private',1)"]);
+  assert.equal(await read(900001), undefined);
+  const own = await create();
+  const result = await api("POST", { id: 900001, expectedRevision: own.revision, title: "Unauthorized" });
+  assert.equal(result.status, 404);
+  const [row] = await sql(["SELECT title FROM user_subjects WHERE id=900001"]);
+  assert.equal(row.results[0].title, "Private");
+});
+
+test("Agent gallery writes remain compatible with their independent authorization and idempotency contract", async () => {
+  const result = await api("POST", { title: "Agent gallery", images: [{ thumbnail: "/test/agent.webp" }] }, "/api/agent/gallery", {
+    authorization: "Bearer media-conflicts-nova", "Idempotency-Key": "agent-gallery-create",
+  });
+  assert.equal(result.status, 201, JSON.stringify(result.body));
+  const updated = await api("PATCH", { id: result.body.gallery.id, title: "Agent updated" }, "/api/agent/gallery", {
+    authorization: "Bearer media-conflicts-nova", "Idempotency-Key": "agent-gallery-update",
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.equal(updated.body.gallery.title, "Agent updated");
+});
+
+test("browser creation retries replay the original receipt without creating another record", async () => {
+  const body = { mediaType: "anime", title: "Lost browser response", idempotencyKey: "browser-lost-response", total: 12, progress: 0 };
+  const first = await api("POST", body);
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  const replay = await api("POST", { progress: 0, total: 12, idempotencyKey: body.idempotencyKey, title: body.title, mediaType: "anime" });
+  assert.equal(replay.status, 201, JSON.stringify(replay.body));
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.body, first.body);
+  const [count] = await sql([`SELECT count(*) AS count FROM user_subjects WHERE user_key='${owner}' AND title='Lost browser response'`]);
+  assert.equal(count.results[0].count, 1);
+
+  const changed = await api("POST", { ...body, title: "Changed retry content" });
+  assert.equal(changed.status, 409, JSON.stringify(changed.body));
+  assert.equal(changed.body.code, "idempotency_conflict");
+  assert.equal((await read(first.body.subject.id)).title, body.title);
+});
+
+test("concurrent browser creates with one key commit only once", async () => {
+  const body = { mediaType: "anime", title: "Concurrent browser create", idempotencyKey: "browser-concurrent-create" };
+  const results = await Promise.all(Array.from({ length: 4 }, () => api("POST", body)));
+  assert.ok(results.some((result) => result.status === 201), JSON.stringify(results));
+  for (const result of results) {
+    assert.ok([201, 409].includes(result.status), JSON.stringify(result));
+    if (result.status === 409) assert.equal(result.body.code, "operation_pending");
+  }
+  const [count] = await sql([`SELECT count(*) AS count FROM user_subjects WHERE user_key='${owner}' AND title='Concurrent browser create'`]);
+  assert.equal(count.results[0].count, 1);
+  const replay = await api("POST", body);
+  assert.equal(replay.status, 201, JSON.stringify(replay.body));
+  assert.equal(replay.replayed, true);
+});
+
+test("replaying a browser create after deletion never recreates the deleted record", async () => {
+  const body = { mediaType: "anime", title: "Deleted create receipt", idempotencyKey: "browser-deleted-receipt" };
+  const created = await api("POST", body);
+  assert.equal(created.status, 201);
+  assert.equal((await api("DELETE", undefined, `/api/media?id=${created.body.subject.id}`)).status, 200);
+  const replay = await api("POST", body);
+  assert.equal(replay.status, 409);
+  assert.equal(replay.body.code, "operation_resource_missing");
+  assert.equal(replay.replayed, true);
+  assert.equal(await read(created.body.subject.id), undefined);
+  const [count] = await sql([`SELECT count(*) AS count FROM user_subjects WHERE user_key='${owner}' AND title='Deleted create receipt'`]);
+  assert.equal(count.results[0].count, 0);
+});
+
+test("browser and Agent idempotency scopes remain independent and caller fields cannot select identity", async () => {
+  const key = "shared-browser-agent-key";
+  const browser = await api("POST", { mediaType: "visual", title: "Browser identity", idempotencyKey: key, agent: "nova", source: "openclaw" });
+  assert.equal(browser.status, 201, JSON.stringify(browser.body));
+  const agent = await api("POST", { title: "Agent identity", images: [{ thumbnail: "/test/agent-identity.webp" }] }, "/api/agent/gallery", {
+    authorization: "Bearer media-conflicts-nova", "Idempotency-Key": key,
+  });
+  assert.equal(agent.status, 201, JSON.stringify(agent.body));
+  assert.notEqual(browser.body.subject.id, agent.body.gallery.id);
+  const [operations] = await sql([`SELECT agent,source FROM agent_operations WHERE user_key='${owner}' AND idempotency_key='${key}' ORDER BY agent`]);
+  assert.deepEqual(operations.results, [{ agent: "browser", source: "browser" }, { agent: "nova", source: "openclaw" }]);
+});
+
+test("an uncertain receipt write leaves a pending reservation and cannot create another record", async () => {
+  const body = { mediaType: "anime", title: "Uncertain browser receipt", idempotencyKey: "browser-uncertain-receipt" };
+  await sql([`CREATE TRIGGER fail_browser_receipt BEFORE UPDATE ON agent_operations WHEN NEW.agent='browser' AND NEW.idempotency_key='browser-uncertain-receipt' AND NEW.status_code=201 BEGIN SELECT RAISE(ABORT,'simulated receipt failure'); END`]);
+  const failed = await api("POST", body);
+  assert.equal(failed.status, 503, JSON.stringify(failed.body));
+  assert.equal(failed.body.code, "operation_outcome_unknown");
+  await sql(["DROP TRIGGER fail_browser_receipt"]);
+  const retried = await api("POST", body);
+  assert.equal(retried.status, 409, JSON.stringify(retried.body));
+  assert.equal(retried.body.code, "operation_pending");
+  const [count, operation] = await sql([
+    `SELECT count(*) AS count FROM user_subjects WHERE user_key='${owner}' AND title='Uncertain browser receipt'`,
+    `SELECT status_code FROM agent_operations WHERE user_key='${owner}' AND agent='browser' AND idempotency_key='browser-uncertain-receipt'`,
+  ]);
+  assert.equal(count.results[0].count, 1);
+  assert.equal(operation.results[0].status_code, 102);
+});

@@ -5,6 +5,7 @@ import { decryptBangumiToken } from "../../../../lib/bangumi-account";
 import { getAllBangumiUserCollections, getBangumiSubject, markBangumiAnimeProgress, subjectImage, subjectScore, subjectTags, updateBangumiCollection, type BangumiCollectionUpdate } from "../../../../lib/bangumi-api";
 import { csrfFailure, requireAdminSession } from "../../../../lib/admin-auth";
 import { getCurrentUser } from "../../../../lib/current-user";
+import { bangumiProgressField, readBangumiProgress } from "../../../../lib/bangumi-progress";
 
 const SUPPORTED_TYPES = new Set(["anime", "game", "light_novel", "manga", "music"]);
 
@@ -81,8 +82,7 @@ async function pushToBangumi(input: { userKey: string; token: string; adminId: n
         comment: item.note,
         tags: parseLocalTags(item.tags),
       };
-      if (item.type === "light_novel") payload.vol_status = Math.max(0, item.progress);
-      if (item.type === "manga") payload.ep_status = Math.max(0, item.progress);
+      if (item.type === "light_novel" || item.type === "manga") payload[bangumiProgressField(item.type)] = Math.max(0, item.progress);
       await updateBangumiCollection(subjectId, payload, { userToken: input.token });
       const episodesMarked = item.type === "anime" ? await markBangumiAnimeProgress(subjectId, item.progress, { userToken: input.token }) : 0;
       updates.push({ mediaId: item.id, subjectId, episodesMarked });
@@ -151,10 +151,8 @@ export async function POST(request: Request) {
           title: existing?.title || remoteTitle,
           jp: existing?.jp || subject.name || "",
           note: existing?.note ?? item.comment ?? "",
-          progress: resolvedType === "music"
-            ? (Number.isInteger(item.vol_status) && item.vol_status! >= 0 ? item.vol_status : 0)
-            : (Number.isInteger(item.ep_status) && item.ep_status! >= 0 ? item.ep_status : 0),
-          total: existing?.total ?? (resolvedType === "music" ? Math.max(1, subject.volumes || 1) : resolvedType === "game" ? 100 : Math.max(1, subject.eps || subject.volumes || 12)),
+          progress: readBangumiProgress(resolvedType, item),
+          total: existing?.total ?? (resolvedType === "music" ? Math.max(1, subject.volumes || 1) : resolvedType === "light_novel" ? Math.max(1, subject.volumes || 12) : resolvedType === "game" ? 100 : Math.max(1, subject.eps || subject.volumes || 12)),
           status: statusForCollectionType(item.type ?? item.collection_type),
           score: Number.isInteger(item.rate) && item.rate! >= 1 && item.rate! <= 10 ? item.rate : null,
           next: existing?.next ?? null,

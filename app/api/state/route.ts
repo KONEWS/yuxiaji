@@ -56,7 +56,16 @@ export async function GET() {
 export async function POST(request: Request) {
   const key = getCurrentUser();
   try {
-    const payload = await request.json() as {
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ error: "请求体必须是有效 JSON 对象" }, { status: 400 });
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return Response.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
+    }
+    const payload = parsed as {
       collections?: unknown[];
       bangumiSyncTypes?: unknown[];
       syncSettings?: unknown;
@@ -96,25 +105,25 @@ export async function POST(request: Request) {
       titleMode: payload.titleMode === "jp" ? "jp" : "cn",
       updatedAt: new Date(),
     };
+    // Update only supplied preferences, in one upsert. Reading and merging the
+    // entire row first would let another tab's unrelated changes be overwritten.
+    const fields = {
+      collections: "collectionsJson", bangumiSyncTypes: "bangumiSyncTypesJson",
+      syncSettings: "syncSettingsJson", mediaOrder: "mediaOrderJson",
+      deviceSubCategories: "deviceSubcategoriesJson", deviceCategoryLabels: "deviceCategoryLabelsJson",
+      visualSubtypeLabels: "visualSubtypeLabelsJson", videoSubtypeLabels: "videoSubtypeLabelsJson",
+      avatarImage: "avatarImage", font: "font", softness: "softness", backgroundVersion: "backgroundVersion",
+      primaryColor: "primaryColor", accentColor: "accentColor", titleMode: "titleMode",
+    } as const;
+    const changes = Object.fromEntries(Object.entries(fields)
+      .filter(([field]) => Object.hasOwn(payload, field))
+      .map(([, column]) => [column, next[column]]));
+    if (!Object.keys(changes).length) return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
     const db = getDb();
     await db.insert(userState).values(next).onConflictDoUpdate({
       target: userState.userKey,
       set: {
-        collectionsJson: next.collectionsJson,
-        bangumiSyncTypesJson: next.bangumiSyncTypesJson,
-        syncSettingsJson: next.syncSettingsJson,
-        mediaOrderJson: next.mediaOrderJson,
-        deviceSubcategoriesJson: next.deviceSubcategoriesJson,
-        deviceCategoryLabelsJson: next.deviceCategoryLabelsJson,
-        visualSubtypeLabelsJson: next.visualSubtypeLabelsJson,
-        videoSubtypeLabelsJson: next.videoSubtypeLabelsJson,
-        avatarImage: next.avatarImage,
-        font: next.font,
-        softness: next.softness,
-        backgroundVersion: next.backgroundVersion,
-        primaryColor: next.primaryColor,
-        accentColor: next.accentColor,
-        titleMode: next.titleMode,
+        ...changes,
         updatedAt: next.updatedAt,
       },
     });

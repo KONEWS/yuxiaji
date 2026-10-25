@@ -37,7 +37,7 @@ export function CoverImage({ src, alt, className, placeholder, style }: { src: s
   }, [src, failed]);
   return failed || !src
     ? <div className={`${className} poster-placeholder`} aria-label={`${alt}加载失败`}>{placeholder}</div>
-    : <img ref={imageRef} className={className} src={src} alt={alt} style={style} onError={() => setFailedSrc(src)} />;
+    : <img ref={imageRef} className={className} src={src} alt={alt} loading="lazy" decoding="async" style={style} onError={() => setFailedSrc(src)} />;
 }
 
 export function CoverPositionEditor({ src, x, y, zoom, onChange, contain = false, alt = "封面位置预览" }: {

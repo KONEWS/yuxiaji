@@ -1,12 +1,13 @@
 import { and, desc, eq, like, or } from "drizzle-orm";
 import { getDb } from "../../../db";
-import { userSubjects } from "../../../db/schema";
+import { userSubjectImages, userSubjects } from "../../../db/schema";
 import { normalizeMediaSource } from "../../lib/media-source";
 import { getCurrentUser } from "../../lib/current-user";
 import { normalizeMediaMetadata, normalizeVideoSubtype, normalizeVisualSubtype } from "../../lib/constants";
-import { deleteMediaAsset } from "../../lib/media-storage";
-import { appendGalleryImage, galleryImagesBySubjectIds, presentGalleryImage, presentLegacyGalleryImage, deleteGalleryImagesForSubjects, cleanupDeletedGalleryAssets, syncGalleryImages, type GalleryImageRow } from "../../lib/gallery-images";
+import { appendGalleryImage, presentGalleryImage, presentLegacyGalleryImage, deleteGalleryImagesForSubjects, cleanupDeletedGalleryAssets, syncGalleryImages, planGalleryImageSync, MAX_GALLERY_IMAGES, type GalleryImageRow } from "../../lib/gallery-images";
 import { mediaStorageLinksByMediaIds } from "../../lib/media-storage-link-store";
+import { MediaConflictError, mediaRevision, mediaSnapshotSelection, snapshotGalleryImages, writeMediaSnapshot, type MediaWriteQuery } from "../../lib/media-revisions";
+import { finishAgentOperation, reserveAgentOperation } from "../../lib/agent-operations";
 
 const MEDIA_TYPES = ["anime", "movie", "tv", "game", "light_novel", "manga", "music", "visual", "video"] as const;
 const STATUSES = ["watching", "wish", "finished", "library", "dropped"] as const;
@@ -189,9 +190,16 @@ function editableSubject(row: typeof userSubjects.$inferSelect): Record<string, 
   };
 }
 
+async function presentBrowserSubject(row: typeof userSubjects.$inferSelect & { snapshot: string }, storageLinks?: unknown[]) {
+  const { snapshot, ...subject } = row;
+  return { ...presentSubject(subject, snapshotGalleryImages(snapshot), storageLinks), revision: await mediaRevision(snapshot) };
+}
+
 export async function GET(request: Request) {
   const key = getCurrentUser();
   const url = new URL(request.url);
+  const id = url.searchParams.get("id");
+  if (id !== null && (!Number.isSafeInteger(Number(id)) || Number(id) <= 0)) return Response.json({ error: "无效的媒体记录 id" }, { status: 400 });
   const type = url.searchParams.get("type");
   const status = url.searchParams.get("status");
   const collection = url.searchParams.get("collection");
@@ -199,6 +207,7 @@ export async function GET(request: Request) {
   const query = url.searchParams.get("q")?.trim();
   try {
     const conditions = [eq(userSubjects.userKey, key)];
+    if (id !== null) conditions.push(eq(userSubjects.id, Number(id)));
     if (type) conditions.push(eq(userSubjects.type, normalizeType(type)));
     if (status && STATUSES.includes(status as (typeof STATUSES)[number])) conditions.push(eq(userSubjects.status, status));
     if (collection) conditions.push(eq(userSubjects.collection, collection));
@@ -207,10 +216,9 @@ export async function GET(request: Request) {
       conditions.push(or(like(userSubjects.title, `%${query.slice(0, 80)}%`), like(userSubjects.jp, `%${query.slice(0, 80)}%`), like(userSubjects.tags, `%${query.slice(0, 80)}%`), like(userSubjects.characterTags, `%${query.slice(0, 80)}%`), like(userSubjects.author, `%${query.slice(0, 80)}%`), like(userSubjects.pixivPid, `%${query.slice(0, 80)}%`), like(userSubjects.musicAlbum, `%${query.slice(0, 80)}%`), like(userSubjects.musicArtist, `%${query.slice(0, 80)}%`), like(userSubjects.lyricist, `%${query.slice(0, 80)}%`), like(userSubjects.composer, `%${query.slice(0, 80)}%`))!);
     }
     const db = getDb();
-    const rows = await db.select().from(userSubjects).where(and(...conditions)).orderBy(desc(userSubjects.updatedAt));
-    const imageMap = await galleryImagesBySubjectIds(db, key, rows.filter((row) => row.type === "visual").map((row) => row.id));
+    const rows = await db.select(mediaSnapshotSelection).from(userSubjects).where(and(...conditions)).orderBy(desc(userSubjects.updatedAt));
     const storageMap = await mediaStorageLinksByMediaIds(db, key, rows.map((row) => row.id));
-    const subjects = rows.map((row) => presentSubject(row, imageMap.get(row.id), storageMap.get(row.id)));
+    const subjects = await Promise.all(rows.map((row) => presentBrowserSubject(row, storageMap.get(row.id))));
     return Response.json({ subjects, stats: { count: subjects.length, active: subjects.filter((item) => item.status === "watching").length } }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "读取媒体记录失败" }, { status: 500 });
@@ -219,6 +227,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const key = getCurrentUser();
+  let createOperationId: number | null = null;
   try {
     let body: Record<string, unknown>;
     try {
@@ -232,8 +241,14 @@ export async function POST(request: Request) {
     const requestedId = Number(body.id);
     const db = getDb();
     if (Number.isInteger(requestedId) && requestedId > 0) {
-      const [existing] = await db.select().from(userSubjects).where(and(eq(userSubjects.id, requestedId), eq(userSubjects.userKey, key))).limit(1);
+      const [existing] = await db.select(mediaSnapshotSelection).from(userSubjects).where(and(eq(userSubjects.id, requestedId), eq(userSubjects.userKey, key))).limit(1);
       if (!existing) return Response.json({ error: "媒体记录不存在或无权修改" }, { status: 404 });
+      const expectedRevision = body.expectedRevision;
+      // Old browser tabs must never replace an image set without proving which
+      // set they edited. Agent and MCP writes use their own routes/contracts.
+      if (expectedRevision !== undefined && expectedRevision !== await mediaRevision(existing.snapshot)
+        || body.images !== undefined && typeof expectedRevision !== "string") throw new MediaConflictError();
+      const existingImages = snapshotGalleryImages(existing.snapshot);
       const merged = { ...editableSubject(existing), ...body };
       if (body.metadata !== undefined) {
         const previousMetadata = parseMetadata(existing.metadata);
@@ -245,21 +260,53 @@ export async function POST(request: Request) {
       if (body.note === undefined && body.description !== undefined) merged.note = body.description;
       if (body.image === undefined && body.cover !== undefined) merged.image = body.cover;
       const updated = sanitizeSubject(merged);
-      await db.update(userSubjects).set(updated).where(and(eq(userSubjects.id, requestedId), eq(userSubjects.userKey, key)));
+      const writes: MediaWriteQuery[] = [db.update(userSubjects).set(updated).where(and(eq(userSubjects.id, requestedId), eq(userSubjects.userKey, key)))];
+      const unusedUrls: string[] = [];
       if (updated.type === "visual") {
-        if (body.images !== undefined) await syncGalleryImages(db, key, requestedId, body.images);
-        else if (updated.thumbnail && updated.thumbnail !== existing.thumbnail) await appendGalleryImage(db, key, requestedId, { thumbnail: updated.thumbnail, isCover: true });
+        let images = body.images;
+        if (images === undefined && updated.thumbnail && updated.thumbnail !== existing.thumbnail) {
+          const found = existingImages.some((image) => image.thumbnail === updated.thumbnail);
+          if (!found && existingImages.length >= MAX_GALLERY_IMAGES) return Response.json({ error: `每个画廊条目最多保存 ${MAX_GALLERY_IMAGES} 张图片` }, { status: 400 });
+          images = [...existingImages.map((image) => ({ ...image, isCover: image.thumbnail === updated.thumbnail })), ...(!found ? [{ thumbnail: updated.thumbnail, isCover: true }] : [])];
+        }
+        if (images !== undefined) {
+          const plan = planGalleryImageSync(db, key, requestedId, images, existingImages);
+          writes.push(...plan.writes);
+          unusedUrls.push(...plan.removedUrls);
+        }
       } else if (existing.type === "visual") {
-        const oldUrls = await deleteGalleryImagesForSubjects(db, key, [requestedId]);
-        if (existing.thumbnail) oldUrls.push(existing.thumbnail);
-        await cleanupDeletedGalleryAssets(db, key, oldUrls);
+        writes.push(db.delete(userSubjectImages).where(and(eq(userSubjectImages.userKey, key), eq(userSubjectImages.subjectId, requestedId))));
+        unusedUrls.push(...existingImages.map((image) => image.thumbnail));
+        if (existing.thumbnail) unusedUrls.push(existing.thumbnail);
       } else if (existing.thumbnail && existing.thumbnail !== updated.thumbnail) {
-        await deleteMediaAsset(existing.thumbnail, key);
+        unusedUrls.push(existing.thumbnail);
       }
-      const [saved] = await db.select().from(userSubjects).where(and(eq(userSubjects.id, requestedId), eq(userSubjects.userKey, key))).limit(1);
-      const imageRows = saved?.type === "visual" ? await galleryImagesBySubjectIds(db, key, [requestedId]) : new Map();
+      await writeMediaSnapshot(db, key, requestedId, existing.snapshot, writes);
+      await cleanupDeletedGalleryAssets(db, key, unusedUrls);
+      const [saved] = await db.select(mediaSnapshotSelection).from(userSubjects).where(and(eq(userSubjects.id, requestedId), eq(userSubjects.userKey, key))).limit(1);
+      if (!saved) throw new MediaConflictError();
       const storageMap = await mediaStorageLinksByMediaIds(db, key, [requestedId]);
-      return Response.json({ ok: true, subject: presentSubject(saved || { ...existing, ...updated, id: requestedId }, imageRows.get(requestedId), storageMap.get(requestedId)) }, { headers: { "cache-control": "no-store" } });
+      return Response.json({ ok: true, subject: await presentBrowserSubject(saved, storageMap.get(requestedId)) }, { headers: { "cache-control": "no-store" } });
+    }
+    // A stable browser key makes a lost response safe to retry. Older clients
+    // without a key remain compatible; a provided invalid key must fail closed.
+    if (Object.prototype.hasOwnProperty.call(body, "idempotencyKey") || request.headers.has("idempotency-key") || request.headers.has("x-idempotency-key")) {
+      const reservation = await reserveAgentOperation({ agent: "browser", source: "browser", userKey: key }, {
+        request, body, resource: "media", action: "create",
+      });
+      if (reservation.kind !== "reserved") {
+        if (reservation.kind === "replayed" && reservation.response.status === 201) {
+          const receipt = await reservation.response.clone().json() as { subject?: { id?: number } };
+          const createdId = receipt.subject?.id;
+          const [stillPresent] = createdId ? await db.select({ id: userSubjects.id }).from(userSubjects)
+            .where(and(eq(userSubjects.id, createdId), eq(userSubjects.userKey, key))).limit(1) : [];
+          if (!stillPresent) return Response.json({ error: "原请求创建的收藏已被删除，重试不会重新创建。", code: "operation_resource_missing", retryable: false }, {
+            status: 409, headers: { "cache-control": "no-store", "x-idempotent-replay": "true" },
+          });
+        }
+        return reservation.response;
+      }
+      createOperationId = reservation.id;
     }
     const [created] = await db.insert(userSubjects).values({ ...next, userKey: key }).returning();
     if (!created) return Response.json({ error: "写入失败" }, { status: 500 });
@@ -267,11 +314,20 @@ export async function POST(request: Request) {
       if (body.images !== undefined) await syncGalleryImages(db, key, created.id, body.images);
       else if (created.thumbnail) await appendGalleryImage(db, key, created.id, { thumbnail: created.thumbnail, isCover: true });
     }
-    const [saved] = await db.select().from(userSubjects).where(and(eq(userSubjects.id, created.id), eq(userSubjects.userKey, key))).limit(1);
-    const imageRows = created.type === "visual" ? await galleryImagesBySubjectIds(db, key, [created.id]) : new Map();
+    const [saved] = await db.select(mediaSnapshotSelection).from(userSubjects).where(and(eq(userSubjects.id, created.id), eq(userSubjects.userKey, key))).limit(1);
+    if (!saved) throw new MediaConflictError();
     const storageMap = await mediaStorageLinksByMediaIds(db, key, [created.id]);
-    return Response.json({ ok: true, subject: presentSubject(saved || created, imageRows.get(created.id), storageMap.get(created.id)) }, { status: 201, headers: { "cache-control": "no-store" } });
+    const payload = { ok: true, subject: await presentBrowserSubject(saved, storageMap.get(created.id)) };
+    if (createOperationId !== null) await finishAgentOperation(createOperationId, 201, payload);
+    return Response.json(payload, { status: 201, headers: { "cache-control": "no-store" } });
   } catch (error) {
+    if (createOperationId !== null) {
+      // Once a persistent write was attempted, failure is not proof that it
+      // rolled back. Leave the reservation pending; never release it for a
+      // second create or overwrite a success receipt that may have committed.
+      return Response.json({ error: "收藏创建结果暂时无法确认，请保留原请求重试并核对收藏，不要重复新建。", code: "operation_outcome_unknown", retryable: false }, { status: 503, headers: { "cache-control": "no-store" } });
+    }
+    if (error instanceof MediaConflictError) return Response.json({ error: error.message, code: "media_conflict" }, { status: 409, headers: { "cache-control": "no-store" } });
     return Response.json({ error: error instanceof Error ? error.message : "保存媒体记录失败" }, { status: 500 });
   }
 }

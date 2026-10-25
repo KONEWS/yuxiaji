@@ -19,20 +19,23 @@ export type TrackerStatePayload = {
   titleMode: string;
 };
 
+export class ClientApiError extends Error {
+  constructor(message: string, public status: number, public code?: string) { super(message); }
+}
+
 async function readJson<T>(response: Response): Promise<T> {
-  const payload = await response.json() as T & { error?: string; details?: string };
-  if (!response.ok) throw new Error([payload.error, payload.details].filter(Boolean).join("：") || `请求失败：${response.status}`);
+  const payload = await response.json() as T & { error?: string; details?: string; code?: string };
+  if (!response.ok) throw new ClientApiError([payload.error, payload.details].filter(Boolean).join("：") || `请求失败：${response.status}`, response.status, payload.code);
   return payload;
 }
 
 export async function loadTrackerState<T>() {
   const response = await fetch("/api/state", { headers: { accept: "application/json" }, cache: "no-store" });
-  if (response.status === 401) return null;
   const payload = await readJson<{ state: T | null }>(response);
   return payload.state;
 }
 
-export async function saveTrackerState(state: TrackerStatePayload) {
+export async function saveTrackerState(state: Partial<TrackerStatePayload>) {
   const response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
@@ -49,6 +52,7 @@ export async function searchRemoteAnime<T>(query: string, mediaType = "anime") {
 
 export type MediaRecordPayload = {
   id?: number;
+  revision?: string;
   mediaType: "anime" | "movie" | "tv" | "game" | "light_novel" | "manga" | "music" | "visual" | "video";
   subjectId?: number | null;
   title: string;
@@ -115,7 +119,7 @@ export type MediaListPayload = {
   stats: { count: number; active: number };
 };
 
-export async function loadMedia(params: { type?: string; status?: string; collection?: string; q?: string } = {}) {
+export async function loadMedia(params: { id?: string; type?: string; status?: string; collection?: string; q?: string } = {}) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, value); });
   const response = await fetch(`/api/media?${query.toString()}`, { headers: { accept: "application/json" }, cache: "no-store" });
@@ -210,7 +214,9 @@ export async function removeCustomAiring(id: number) {
   return readJson<{ ok: boolean; id: number }>(response);
 }
 
-export async function saveMedia(subject: MediaRecordPayload) {
+export type MediaUpdatePayload = Omit<Partial<MediaRecordPayload>, "metadata"> & { metadata?: Partial<MediaMetadata>; expectedRevision?: string; idempotencyKey?: string };
+
+export async function saveMedia(subject: MediaUpdatePayload) {
   const response = await fetch("/api/media", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },

@@ -63,6 +63,8 @@ export type MediaMetadata = {
   fieldSources?: MediaFieldSources;
   /** Distinguishes a light novel from a general book in shared UI storage. */
   bookKind?: "light_novel" | "book";
+  /** An explicit calendar opt-out preserves the collection and its history. */
+  calendarTracking?: boolean;
   /** Percentage-based focal point used when the cover is displayed with object-fit: cover. */
   coverPositionX?: number;
   coverPositionY?: number;
@@ -198,6 +200,7 @@ export function normalizeMediaMetadata(value?: unknown): MediaMetadata {
     identifiers: stringMap(source.identifiers, 20),
     ...(Object.keys(fieldSources).length ? { fieldSources } : {}),
     ...(bookKind ? { bookKind } : {}),
+    ...(typeof source.calendarTracking === "boolean" ? { calendarTracking: source.calendarTracking } : {}),
     ...(coverPositionX !== undefined ? { coverPositionX } : {}),
     ...(coverPositionY !== undefined ? { coverPositionY } : {}),
     ...(normalizedCoverZoom !== undefined ? { coverZoom: normalizedCoverZoom } : {}),

@@ -66,3 +66,20 @@
 @media (forced-colors: active) {
   .theme-yuehua .yuehua-segments > button.active { outline: 2px solid Highlight; outline-offset: -3px; }
 }
+
+/* Native disabled fieldsets keep editor controls inert during a save. */
+fieldset.editor-dialog { min-inline-size: 0; margin-inline: 0; }
+fieldset.editor-fields { min-inline-size: 0; margin: 0; border: 0; }
+.lookup-message { padding: 14px; }
+.lookup-message p { margin: 0 0 10px; color: var(--muted); }
+
+.theme-yuehua .save-notices {
+  display: grid; gap: 8px; margin: 16px 0; padding: 12px 16px;
+  border: 1px solid var(--control-selected-border); border-radius: 16px;
+  background: var(--control-selected); color: var(--ink);
+}
+.theme-yuehua .save-notices > div { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.theme-yuehua .save-notices span { flex: 1 1 240px; overflow-wrap: anywhere; }
+.theme-yuehua .save-notices p { margin: 0; }
+.theme-yuehua .save-notices button { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--control-selected-border); background: #fff; color: var(--ink); cursor: pointer; }
+.theme-yuehua .save-notices button:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }

@@ -1,6 +1,9 @@
 "use client";
 
 import { ActionButton, DialogActions, DialogHeading, SegmentedControl } from "./ui";
+import { useDialogBehavior } from "./use-dialog-behavior";
+import { normalizeEditableProgress } from "../../lib/media-progress";
+import { isTrackedCalendarEntry } from "../../lib/calendar-tracking";
 
 import { useEffect, useRef, useState } from "react";
 import { fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, removeCustomAiring, removeMediaStorageLink, saveCustomAiring, saveMediaStorageLink, syncAiringSchedules, type MediaStorageLink } from "../../lib/client-api";
@@ -139,7 +142,7 @@ function GalleryImagesField({ images, inputId, uploading, positionX, positionY, 
   return <section className="wide gallery-images-field" aria-labelledby={`${inputId}-label`}>
     <div className="gallery-images-heading"><div><b id={`${inputId}-label`}>画廊图片</b><small>仅保存压缩缩略图，最多 {MAX_GALLERY_IMAGES} 张</small></div><span>{normalized.length} 张</span></div>
     <span className="file-picker gallery-file-picker"><input id={inputId} className="file-picker-input" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void uploadFiles(files); }} disabled={busy || normalized.length >= MAX_GALLERY_IMAGES} /><ActionButton type="button" className="file-picker-button" onClick={() => document.getElementById(inputId)?.click()} disabled={busy || normalized.length >= MAX_GALLERY_IMAGES}>{busy ? "上传中…" : "选择多张图片"}</ActionButton><small>{normalized.length >= MAX_GALLERY_IMAGES ? "已达到图片数量上限" : normalized.length ? `已加入 ${normalized.length} 张，可继续添加` : "可一次选择多张 JPG、PNG 或 WebP"}</small></span>
-    {normalized.length > 0 ? <div className="gallery-image-editor">{normalized.map((image, index) => { const src = mediaImageUrl(image); return <article className={image.isCover ? "cover" : ""} key={`${image.id || "new"}:${src}`}><div className="gallery-image-preview"><img src={src} alt={`画廊图片 ${index + 1}`} referrerPolicy="no-referrer" />{image.isCover && <span>封面</span>}</div><div className="gallery-image-controls"><button type="button" onClick={() => move(index, -1)} disabled={index === 0} aria-label={`将第 ${index + 1} 张前移`} title="前移">←</button><button type="button" onClick={() => move(index, 1)} disabled={index === normalized.length - 1} aria-label={`将第 ${index + 1} 张后移`} title="后移">→</button><button type="button" className="set-cover" onClick={() => setCover(index)} disabled={Boolean(image.isCover)}>{image.isCover ? "主图" : "设为主图"}</button><button type="button" className="remove" onClick={() => remove(index)} aria-label={`移除第 ${index + 1} 张图片`}>删除</button></div></article>; })}</div> : <p className="gallery-images-empty">还没有图片。上传多张图片后，第一张会作为条目封面。</p>}
+    {normalized.length > 0 ? <div className="gallery-image-editor">{normalized.map((image, index) => { const src = mediaImageUrl(image); return <article className={image.isCover ? "cover" : ""} key={`${image.id || "new"}:${src}`}><div className="gallery-image-preview"><img src={src} alt={`画廊图片 ${index + 1}`} loading="lazy" decoding="async" referrerPolicy="no-referrer" />{image.isCover && <span>封面</span>}</div><div className="gallery-image-controls"><button type="button" onClick={() => move(index, -1)} disabled={index === 0} aria-label={`将第 ${index + 1} 张前移`} title="前移">←</button><button type="button" onClick={() => move(index, 1)} disabled={index === normalized.length - 1} aria-label={`将第 ${index + 1} 张后移`} title="后移">→</button><button type="button" className="set-cover" onClick={() => setCover(index)} disabled={Boolean(image.isCover)}>{image.isCover ? "主图" : "设为主图"}</button><button type="button" className="remove" onClick={() => remove(index)} aria-label={`移除第 ${index + 1} 张图片`}>删除</button></div></article>; })}</div> : <p className="gallery-images-empty">还没有图片。上传多张图片后，第一张会作为条目封面。</p>}
     {coverSrc && <CoverPositionEditor src={coverSrc} x={positionX} y={positionY} zoom={zoom} contain alt="画廊主图位置预览" onChange={onPositionChange} />}
     <div className="gallery-image-add-row"><input type="url" value={urlDraft} onChange={(event) => setUrlDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addUrl(); } }} placeholder="粘贴一张图片地址" aria-label="画廊图片地址" disabled={busy || normalized.length >= MAX_GALLERY_IMAGES} /><button type="button" onClick={addUrl} disabled={busy || !urlDraft.trim() || normalized.length >= MAX_GALLERY_IMAGES}>添加地址</button></div>
   </section>;
@@ -167,20 +170,35 @@ function primarySupplementalProvider(item: Pick<Anime, "source" | "subjectId" | 
   return hasPrimarySource ? undefined : DETAIL_SOURCE_PROVIDERS.find((provider) => item.metadata?.sources?.[provider]);
 }
 
-function AddModal({ query, setQuery, search, searching, results, choose, form, setForm, collections, close, submit, uploadImage, thumbnailUploading, visualSubtypeLabels, openVisualSubtypeManager, videoSubtypeLabels, openVideoSubtypeManager }: {
-  query: string; setQuery: (value: string) => void; searching: boolean; results: SearchResult[];
+function AddModal({ query, setQuery, search, searching, searchError = "", searchAttempted = false, results, choose, form, setForm, collections, close, submit, uploadImage, thumbnailUploading, visualSubtypeLabels, openVisualSubtypeManager, videoSubtypeLabels, openVideoSubtypeManager }: {
+  query: string; setQuery: (value: string) => void; searching: boolean; searchError?: string; searchAttempted?: boolean; results: SearchResult[];
   choose: (result: SearchResult) => void | Promise<void>; form: AddForm;
   setForm: React.Dispatch<React.SetStateAction<AddForm>>;
-  collections: string[]; search: () => void; close: () => void; submit: () => void; uploadImage: (file?: File) => Promise<string | null>; thumbnailUploading: boolean; visualSubtypeLabels: VisualSubtypeLabels; openVisualSubtypeManager: (returnTo?: "add" | "library") => void; videoSubtypeLabels: VideoSubtypeLabels; openVideoSubtypeManager: (returnTo?: "add" | "library") => void;
+  collections: string[]; search: () => void; close: () => void; submit: () => Promise<void>; uploadImage: (file?: File) => Promise<string | null>; thumbnailUploading: boolean; visualSubtypeLabels: VisualSubtypeLabels; openVisualSubtypeManager: (returnTo?: "add" | "library") => void; videoSubtypeLabels: VideoSubtypeLabels; openVideoSubtypeManager: (returnTo?: "add" | "library") => void;
 }) {
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const saveInFlight = useRef(false);
+  const [initialForm] = useState(() => JSON.stringify(form));
+  const dirty = initialForm !== JSON.stringify(form) || Boolean(form.title.trim() || form.note.trim() || form.image || form.thumbnail || form.images?.length);
+  const { dialogRef, requestClose } = useDialogBehavior<HTMLFieldSetElement>({ close, dirty, busy: saving || thumbnailUploading });
+  const submitForm = async () => {
+    if (saveInFlight.current || thumbnailUploading) return;
+    saveInFlight.current = true;
+    setSaving(true);
+    setSaveError("");
+    try { await submit(); }
+    catch (error) { setSaveError(error instanceof Error ? error.message : "保存失败，草稿已保留，请重试"); }
+    finally { saveInFlight.current = false; setSaving(false); }
+  };
   const setting = mediaSettings[form.mediaType];
   const canSearchRemote = ["anime", "game", "light_novel", "manga", "music", "movie", "tv"].includes(form.mediaType);
   const isMusic = form.mediaType === "music";
   const isVisual = form.mediaType === "visual";
   const isVideo = form.mediaType === "video";
   const isFilm = form.mediaType === "movie" || form.mediaType === "tv";
-  return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal-card add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title">
-    <DialogHeading eyebrow="添加到月下集" title="新的收藏" id="add-title" onClose={close} closeLabel="关闭" />
+  return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><fieldset ref={dialogRef} tabIndex={-1} disabled={saving} className="modal-card add-modal editor-dialog" role="dialog" aria-modal="true" aria-labelledby="add-title" aria-busy={saving}>
+    <DialogHeading eyebrow="添加到月下集" title="新的收藏" id="add-title" onClose={requestClose} disabled={saving || thumbnailUploading} closeLabel="关闭" />
     <div className="media-type-picker">{mediaMeta.filter(([id]) => id !== "all").map(([id, label, icon]) => <button key={id} className={form.mediaType === id ? "active" : ""} onClick={() => { const nextType = id as MediaType; const nextFilm = nextType === "movie" || nextType === "tv"; setForm({ ...form, mediaType: nextType, total: nextType === "game" ? 100 : nextType === "movie" || nextType === "music" || nextType === "video" ? 1 : form.total === 100 ? 12 : form.total, subjectId: undefined, image: "", thumbnail: "", images: [], globalScore: nextFilm ? form.globalScore : undefined, metadata: nextFilm || nextType === "video" ? form.metadata : normalizeMediaMetadata() }); setQuery(""); }}><i>{icon}</i>{label}</button>)}</div>
     <div className="source-suggestion"><span>推荐数据源</span><b>{setting.sources}</b></div>
     {canSearchRemote && <><label>搜索 {isFilm ? "TMDB" : form.mediaType === "game" ? "Bangumi + VNDB" : form.mediaType === "manga" ? "Bangumi + AniList + MangaDex" : form.mediaType === "light_novel" ? "Bangumi + AniList + NDL + 图书目录" : "Bangumi"} 全库</label>
@@ -189,7 +207,7 @@ function AddModal({ query, setQuery, search, searching, results, choose, form, s
      {isFilm && <p className="search-help">影视条目由月下集手动记录，以下信息会保存在扩展元数据中。</p>}
     {isVisual && <p className="search-help">画廊只保存缩略图和元数据，不保存原图；原始图片最大 20 MB，浏览器会压缩为不超过 5 MB 的缩略图。</p>}
     {isVideo && <p className="search-help">视频只保存标题、图片地址和元数据，不上传视频文件、不提供在线播放。</p>}
-    {(searching || results.length > 0) && <div className="lookup-results">{searching ? <p>搜索中…</p> : results.slice(0, 12).map((result) => <button className="search-result" key={`${result.source}:${result.externalId || result.id}`} onClick={() => { void choose(result); }}>{result.image ? <img src={result.image} alt="" referrerPolicy="no-referrer" /> : <i>无图</i>}<span><b>{result.title}</b><small>{providerLabel(result.source)}{result.jp ? ` · ${result.jp}` : ""}{result.date ? ` · ${result.date.slice(0, 4)}年` : ""}</small></span><em>选择</em></button>)}</div>}
+    {canSearchRemote && (searching || searchError || searchAttempted || results.length > 0) && <div className="lookup-results" aria-live="polite">{searching ? <p>搜索中…</p> : searchError ? <div className="lookup-message" role="alert"><p>{searchError}</p><ActionButton onClick={search}>重试搜索</ActionButton></div> : results.length === 0 ? <p>没有找到匹配的作品，可以换个关键词或手动填写。</p> : results.slice(0, 12).map((result) => <button className="search-result" key={`${result.source}:${result.externalId || result.id}`} onClick={() => { void choose(result); }}>{result.image ? <img src={result.image} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" /> : <i>无图</i>}<span><b>{result.title}</b><small>{providerLabel(result.source)}{result.jp ? ` · ${result.jp}` : ""}{result.date ? ` · ${result.date.slice(0, 4)}年` : ""}</small></span><em>选择</em></button>)}</div>}
     <div className="form-divider"><span>也可以手动填写</span></div>
     <div className="form-grid">
       <label className="wide">{isMusic ? "单曲名称" : "收藏名称"}<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder={isMusic ? "例如：晴る" : "作品名称"} /></label>
@@ -204,8 +222,9 @@ function AddModal({ query, setQuery, search, searching, results, choose, form, s
       {isVisual ? <><GalleryImagesField images={normalizeMediaImages(form.images, form.thumbnail)} inputId="add-gallery-images-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} uploadImage={uploadImage} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onChange={(images) => setForm((current) => { const normalized = normalizeMediaImages(images); return { ...current, images: normalized, thumbnail: mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]) }; })} /><label>画廊子类型<div className="inline-field"><RoundedSelect value={form.visualSubtype} onChange={(value) => setForm({ ...form, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /><button type="button" className="inline-manage-button" onClick={() => openVisualSubtypeManager("add")}>管理</button></div></label><label>作者<input value={form.author} onChange={(event) => setForm({ ...form, author: event.target.value })} placeholder="作者名" /></label><label>Pixiv PID<input value={form.pixivPid} onChange={(event) => setForm({ ...form, pixivPid: event.target.value })} placeholder="可选" /></label><label>Twitter / X 来源<input value={form.twitterSource} onChange={(event) => setForm({ ...form, twitterSource: event.target.value })} placeholder="可选链接" /></label><label className="wide">来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="Pixiv、个人站点或其他来源" /></label></> : !isVideo && <CoverField value={form.image} label="封面图片" placeholder="搜索选择后会自动填入，也可粘贴图片地址" previewAlt="封面预览" inputId="add-media-cover-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} onChange={(value) => setForm((current) => ({ ...current, image: value }))} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onUpload={async (file) => { const url = await uploadImage(file); if (url) setForm((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) })); }} />}
       <label className="wide">{isVideo ? "简介" : "备注"}<textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder={isVideo ? "视频描述" : "观看理由、角色或片段…"} /></label>
     </div>
-    <DialogActions><ActionButton onClick={close}>取消</ActionButton><ActionButton variant="primary" onClick={submit} disabled={thumbnailUploading}>{thumbnailUploading ? "图片上传中…" : "加入月下集"}</ActionButton></DialogActions>
-  </section></div>;
+    {saveError && <p className="detail-save-error" role="alert">{saveError}</p>}
+    <DialogActions><ActionButton onClick={requestClose} disabled={saving || thumbnailUploading}>取消</ActionButton><ActionButton variant="primary" onClick={() => void submitForm()} disabled={saving || thumbnailUploading}>{thumbnailUploading ? "图片上传中…" : saving ? "保存中…" : saveError ? "重试保存" : "加入月下集"}</ActionButton></DialogActions>
+  </fieldset></div>;
 }
 
 function VisualSubtypeModal({ labels, close, save }: { labels: VisualSubtypeLabels; close: () => void; save: (labels: VisualSubtypeLabels) => void }) {
@@ -347,8 +366,9 @@ function TagManagerModal({ entries, activeTags, setActiveTags, close, setPrefere
   </section></div>;
 }
 
-function DetailDrawer({ item, collections, close, save, remove, uploadImage, imageUploading, visualSubtypeLabels, videoSubtypeLabels, syncSettings }: { item: Anime; collections: string[]; close: () => void; save: (item: Anime) => void; remove: (id: number) => void; uploadImage: (file?: File) => Promise<string | null>; imageUploading: boolean; visualSubtypeLabels?: VisualSubtypeLabels; videoSubtypeLabels?: VideoSubtypeLabels; syncSettings: SyncSettings }) {
+function DetailDrawer({ item, collections, close, save, remove, uploadImage, imageUploading, visualSubtypeLabels, videoSubtypeLabels, syncSettings }: { item: Anime; collections: string[]; close: () => void; save: (item: Anime, original?: Anime) => Promise<void>; remove: (id: number) => void; uploadImage: (file?: File) => Promise<string | null>; imageUploading: boolean; visualSubtypeLabels?: VisualSubtypeLabels; videoSubtypeLabels?: VideoSubtypeLabels; syncSettings: SyncSettings }) {
   type ExternalDetail = BangumiDetail & { overview?: string; coverImage?: string; originalTitle?: string; genres?: string[]; source?: string };
+  const [originalItem] = useState<Anime>(() => item);
   const [draft, setDraft] = useState<Anime>(() => item);
   const [tagText, setTagText] = useState(() => splitTags([...item.tags, ...(item.characterTags || [])].join("，")).join("，"));
   const [subjectIdTouched, setSubjectIdTouched] = useState(false);
@@ -363,6 +383,12 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
   ));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const saveInFlight = useRef(false);
+  // Storage links save independently; they must not count as unsaved edits.
+  const dirty = JSON.stringify({ ...draft, storageLinks: undefined }) !== JSON.stringify({ ...originalItem, storageLinks: undefined })
+    || tagText !== splitTags([...originalItem.tags, ...(originalItem.characterTags || [])].join("，")).join("，")
+    || JSON.stringify(sourceIdDrafts) !== JSON.stringify(Object.fromEntries(Object.entries(originalItem.metadata?.sources || {}).filter(([provider]) => DETAIL_SOURCE_PROVIDERS.includes(provider as DetailSourceProvider))));
+  const { dialogRef, requestClose } = useDialogBehavior({ close, dirty, busy: saving || imageUploading });
   useEffect(() => {
     let active = true;
     if (["movie", "tv", "visual", "video"].includes(item.mediaType || "")) return () => { active = false; };
@@ -492,7 +518,8 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
     if (url) setDraft((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) }));
   };
   const submit = async () => {
-    if (saving) return;
+    if (saveInFlight.current || imageUploading) return;
+    saveInFlight.current = true;
     setSaving(true);
     setSaveError("");
     try {
@@ -554,26 +581,25 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
         }
       }
       const finalMediaType = nextDraft.mediaType || "anime";
-      const finalIsMusic = finalMediaType === "music";
       const finalIsVisual = finalMediaType === "visual";
       const finalIsVideo = finalMediaType === "video";
       const finalIsFilm = finalMediaType === "movie" || finalMediaType === "tv";
       const finalIsVndb = nextDraft.source === "vndb" || Boolean(nextDraft.metadata?.vndbId);
       const finalSubjectId = nextDraft.subjectId;
-      const total = finalIsMusic || finalIsVisual || finalIsFilm || finalIsVideo ? 1 : Math.max(1, Number(nextDraft.total) || 1);
-      const progress = finalIsMusic || finalIsVisual || finalIsFilm || finalIsVideo ? 0 : Math.min(Math.max(0, Number(nextDraft.progress) || 0), total);
+      const { total, progress } = normalizeEditableProgress(finalMediaType, nextDraft.total, nextDraft.progress);
       const metadata = normalizeMediaMetadata({ ...nextDraft.metadata, sources: { ...(nextDraft.metadata?.sources || {}), ...sourceIdDrafts }, ...(finalIsVndb && detailVndbId ? { vndbId: detailVndbId, vndbUrl: `https://vndb.org/${detailVndbId}`, provider: "vndb" } : {}), videoSource: finalIsVideo ? nextDraft.metadata?.videoSource || nextDraft.source || "" : nextDraft.metadata?.videoSource });
-      save({ ...nextDraft, image: finalIsVisual ? undefined : nextDraft.image, subjectId: finalIsVisual || finalIsFilm || finalIsVideo ? undefined : finalIsVndb ? (detailVndbId ? Number(detailVndbId.slice(1)) : undefined) : finalSubjectId, source: finalIsVideo ? "manual" : normalizeMediaSource(nextDraft.source, finalIsVisual || finalIsFilm ? "manual" : finalIsVndb ? "vndb" : finalSubjectId ? "bangumi" : "manual"), videoSubtype: finalIsVideo ? normalizeVideoSubtype(nextDraft.videoSubtype) : "other", metadata, tags: splitTags(tagText), characterTags: [], progress, status: nextDraft.status === "wish" && progress > 0 ? "watching" : nextDraft.status, total, updatedAt: Date.now() });
+      await save({ ...nextDraft, image: finalIsVisual ? undefined : nextDraft.image, subjectId: finalIsVisual || finalIsFilm || finalIsVideo ? undefined : finalIsVndb ? (detailVndbId ? Number(detailVndbId.slice(1)) : undefined) : finalSubjectId, source: finalIsVideo ? "manual" : normalizeMediaSource(nextDraft.source, finalIsVisual || finalIsFilm ? "manual" : finalIsVndb ? "vndb" : finalSubjectId ? "bangumi" : "manual"), videoSubtype: finalIsVideo ? normalizeVideoSubtype(nextDraft.videoSubtype) : "other", metadata, tags: splitTags(tagText), characterTags: [], progress, status: nextDraft.status === "wish" && progress > 0 ? "watching" : nextDraft.status, total, updatedAt: Date.now() }, originalItem);
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "新 ID 的详情读取失败，未保存修改");
+      setSaveError(error instanceof Error ? error.message : "保存失败，草稿已保留，请重试");
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
       setDetailLoading(false);
     }
   };
-  return <div className="overlay detail-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><aside className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-    <header><h2 id="detail-title">收藏详情</h2><button onClick={close} aria-label="关闭详情">×</button></header>
-    <div className="detail-content">
+  return <div className="overlay detail-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><aside ref={dialogRef} tabIndex={-1} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title" aria-busy={saving}>
+    <header><h2 id="detail-title">收藏详情</h2><button onClick={requestClose} disabled={saving || imageUploading} aria-label="关闭详情">×</button></header>
+    <fieldset className="detail-content editor-fields" disabled={saving}>
       <section className="detail-hero">
         <div className={isVisual ? "detail-gallery-cover" : "detail-cover-frame"}><CoverImage key={isVisual ? visualCover : cover} className={`detail-cover ${isVisual ? "gallery-detail-cover" : ""}`} src={isVisual ? visualCover : cover} alt={`${draft.title}封面`} placeholder={draft.title.slice(0, 2)} style={coverPositionStyle(draft.metadata?.coverPositionX, draft.metadata?.coverPositionY, draft.metadata?.coverZoom)} />{isVisual && galleryImages.length > 1 && <span>共 {galleryImages.length} 张</span>}</div>
         <div>{!isMusic && !isVisual && !isVideo && <span className="detail-status">{{ watching: "进行中", wish: "未开始", finished: "已完成", library: "搁置", dropped: "抛弃" }[draft.status]}</span>}<span className={`detail-media media-${mediaType}`}>{mediaMeta.find(([id]) => id === mediaType)?.[1]}</span><h3>{draft.title}</h3>{draft.jp && <p>{draft.jp}</p>}{draft.next && <div className="detail-next"><b>{draft.next}</b><small>更新提醒已开启</small></div>}</div>
@@ -607,8 +633,8 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
       <div className={`detail-source ${!isVisual && !isVideo && !isFilm ? "detail-source-editable" : ""}`}><span>{isFilm ? `TMDB${draft.metadata?.tmdbId ? ` #${draft.metadata.tmdbId}` : ""}` : isVndb ? `VNDB${detailVndbId ? ` ${detailVndbId}` : ""}` : supplementalProvider ? `${DETAIL_SOURCE_LABELS[supplementalProvider]}${detailSupplementalId ? ` ${detailSupplementalId}` : ""}` : `${draft.source || setting.sources}`}</span>{!isVisual && !isVideo && !isFilm && (isVndb ? <label className="detail-source-id"><span>VNDB ID</span><input aria-label="VNDB ID" value={detailVndbId} onChange={(event) => setVndbId(event.target.value)} placeholder="例如 v11" /></label> : !supplementalProvider ? <label className="detail-source-id"><span>Bangumi ID</span><input aria-label="Bangumi ID" inputMode="numeric" pattern="[0-9]*" value={subjectIdTouched ? draft.subjectId ?? "" : draft.subjectId ?? bangumi?.id ?? ""} onChange={(event) => setSubjectId(event.target.value)} placeholder="可选" /></label> : null)}{isFilm && draft.metadata?.tmdbId ? <a href={`https://www.themoviedb.org/${mediaType}/${draft.metadata.tmdbId}`} target="_blank" rel="noreferrer">查看 TMDB ↗</a> : isVndb && detailVndbId ? <a href={`https://vndb.org/${detailVndbId}`} target="_blank" rel="noreferrer">查看 VNDB ↗</a> : supplementalProvider && detailSupplementalId ? <a href={supplementalProvider === "anilist" ? `https://anilist.co/${mediaType === "anime" ? "anime" : "manga"}/${detailSupplementalId}` : supplementalProvider === "mangadex" ? `https://mangadex.org/title/${detailSupplementalId}` : supplementalProvider === "google_books" ? `https://books.google.com/books?id=${encodeURIComponent(detailSupplementalId)}` : supplementalProvider === "open_library" ? `https://openlibrary.org/works/${encodeURIComponent(detailSupplementalId)}` : `https://ndlsearch.ndl.go.jp/books/${encodeURIComponent(detailSupplementalId)}`} target="_blank" rel="noreferrer">查看来源 ↗</a> : detailSubjectId && <a href={`https://bgm.tv/subject/${detailSubjectId}`} target="_blank" rel="noreferrer">查看 Bangumi ↗</a>}</div>
       {!isVisual && !isVideo && <div className={`detail-source-links ${sourceLinksOpen ? "open" : "collapsed"}`}><button type="button" className="detail-source-links-toggle" onClick={() => setSourceLinksOpen((current) => !current)} aria-expanded={sourceLinksOpen}><span>关联来源 ID（可选）</span><b className={sourceLinksOpen ? "up" : "down"} aria-hidden="true" /></button>{sourceLinksOpen && <div className="detail-source-links-grid">{DETAIL_SOURCE_PROVIDERS.map((provider) => <label key={provider}><span>{DETAIL_SOURCE_LABELS[provider]}</span><input value={sourceIdDrafts[provider] || ""} onChange={(event) => setSourceId(provider, event.target.value)} placeholder="未绑定" /></label>)}</div>}</div>}
       <StorageLinksField mediaId={draft.id} initialLinks={draft.storageLinks} onChange={(storageLinks) => setDraft((current) => ({ ...current, storageLinks }))} />
-      <footer><ActionButton variant="danger" onClick={() => { if (window.confirm(`确定移除《${draft.title}》吗？`)) remove(draft.id); }} disabled={saving || imageUploading}>移除条目</ActionButton>{saveError && <p className="detail-save-error" role="alert">{saveError}</p>}<ActionButton variant="primary" onClick={() => { void submit(); }} disabled={saving || imageUploading}>{imageUploading ? "图片上传中…" : saving ? "刷新并保存…" : "保存修改"}</ActionButton></footer>
-    </div>
+      <footer><ActionButton variant="danger" onClick={() => { if (window.confirm(`确定移除《${draft.title}》吗？`)) remove(draft.id); }} disabled={saving || imageUploading}>移除条目</ActionButton>{saveError && <p className="detail-save-error" role="alert">{saveError}</p>}<ActionButton variant="primary" onClick={() => { void submit(); }} disabled={saving || imageUploading}>{imageUploading ? "图片上传中…" : saving ? "保存中…" : saveError ? "重试保存" : "保存修改"}</ActionButton></footer>
+    </fieldset>
   </aside></div>;
 }
 
@@ -634,25 +660,6 @@ type CalendarDisplayEntry = CalendarEntry & { schedule?: AiringSchedule };
 
 function sourceName(value: string) {
   return value.split("+").map((source) => ({ bangumi: "Bangumi", anilist: "AniList", animeschedule: "AnimeSchedule", custom: "自定义" } as Record<string, string>)[source] || source).join(" + ");
-}
-
-function calendarSourceTokens(value: string) {
-  return value.split("+").map((source) => source.trim().toLowerCase()).filter(Boolean).map((source) => source === "anime schedule" ? "animeschedule" : source);
-}
-
-function isTrackedCalendarEntry(item: CalendarDisplayEntry, anime: Anime[]) {
-  const providers = calendarSourceTokens(item.source);
-  const sourceIds = item.sourceIds || {};
-  for (const provider of providers) {
-    const expected = sourceIds[provider] || (providers.length === 1 && item.subjectId ? String(item.subjectId) : "");
-    if (!expected) continue;
-    if (anime.some((tracked) => {
-      const actual = tracked.metadata?.sources?.[provider]
-        || ((tracked.source === provider || provider === "bangumi" && tracked.source === "bangumi") && tracked.subjectId ? String(tracked.subjectId) : "");
-      return actual === expected;
-    })) return true;
-  }
-  return anime.some((tracked) => tracked.tags.includes("放送追更") && (tracked.title === item.title || Boolean(tracked.jp && item.jp && tracked.jp === item.jp)));
 }
 
 function CalendarListRow({ item, titleMode, toggle, editCustom }: { item: CalendarDisplayEntry; titleMode: string; toggle: (item: CalendarEntry) => void; editCustom?: (item: AiringSchedule) => void }) {
@@ -763,7 +770,7 @@ function CalendarModal({ initialDay, close, titleMode, anime, airingSchedules, t
       coverQuery: item.jpTitle || item.title,
       coverUrl: typeof image === "string" ? image.replace(/^http:\/\//i, "https://") : undefined,
       meta: `${item.airTime || "时间待定"} · 下一集 ${item.nextEpisode ?? "待定"}`,
-      followed: Boolean(item.isCollected) || isTrackedCalendarEntry({ title: item.title, jp: item.jpTitle, subjectId: item.subjectId, sourceIds, coverQuery: item.jpTitle || item.title, meta: "", followed: false, source: item.source, day: ["", "一", "二", "三", "四", "五", "六", "日"][item.weekday] as WeekDay, long: false }, anime),
+      followed: isTrackedCalendarEntry({ title: item.title, jp: item.jpTitle, subjectId: item.subjectId, sourceIds, source: item.source }, anime),
       source: sourceName(item.source || "bangumi"),
       day: ["", "一", "二", "三", "四", "五", "六", "日"][item.weekday] as WeekDay,
       long: isLongRunningSchedule(item.metadata, item.nextEpisode),
