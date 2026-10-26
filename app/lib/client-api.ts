@@ -29,8 +29,8 @@ async function readJson<T>(response: Response): Promise<T> {
   return payload;
 }
 
-export async function loadTrackerState<T>() {
-  const response = await fetch("/api/state", { headers: { accept: "application/json" }, cache: "no-store" });
+export async function loadTrackerState<T>(signal?: AbortSignal) {
+  const response = await fetch("/api/state", { signal, headers: { accept: "application/json" }, cache: "no-store" });
   const payload = await readJson<{ state: T | null }>(response);
   return payload.state;
 }
@@ -44,8 +44,8 @@ export async function saveTrackerState(state: Partial<TrackerStatePayload>) {
   return readJson<{ ok: boolean }>(response);
 }
 
-export async function searchRemoteAnime<T>(query: string, mediaType = "anime") {
-  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(mediaType)}`, { headers: { accept: "application/json" } });
+export async function searchRemoteAnime<T>(query: string, mediaType = "anime", signal?: AbortSignal) {
+  const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(mediaType)}`, { signal, headers: { accept: "application/json" } });
   const payload = await readJson<{ results: T[] }>(response);
   return Array.isArray(payload.results) ? payload.results : [];
 }
@@ -119,10 +119,10 @@ export type MediaListPayload = {
   stats: { count: number; active: number };
 };
 
-export async function loadMedia(params: { id?: string; type?: string; status?: string; collection?: string; q?: string } = {}) {
+export async function loadMedia(params: { id?: string; type?: string; status?: string; collection?: string; q?: string } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => { if (value) query.set(key, value); });
-  const response = await fetch(`/api/media?${query.toString()}`, { headers: { accept: "application/json" }, cache: "no-store" });
+  const response = await fetch(`/api/media?${query.toString()}`, { signal, headers: { accept: "application/json" }, cache: "no-store" });
   return readJson<MediaListPayload>(response);
 }
 
@@ -249,7 +249,7 @@ export async function removeMediaStorageLink(mediaId: number, id: number) {
   return readJson<{ ok: boolean; storageLinks: MediaStorageLink[] }>(response);
 }
 
-export type SubjectDetailOptions = { provider?: "bangumi" | "vndb" | "tmdb" | "anilist" | "mangadex" | "google_books" | "open_library" | "ndl"; externalId?: string };
+export type SubjectDetailOptions = { provider?: "bangumi" | "vndb" | "tmdb" | "anilist" | "mangadex" | "google_books" | "open_library" | "ndl"; externalId?: string; signal?: AbortSignal };
 
 export async function fetchSubjectDetail<T>(subjectId?: number, query?: string, mediaType = "anime", options: SubjectDetailOptions = {}) {
   const params = new URLSearchParams();
@@ -258,7 +258,7 @@ export async function fetchSubjectDetail<T>(subjectId?: number, query?: string, 
   params.set("type", mediaType);
   if (options.provider) params.set("provider", options.provider);
   if (options.externalId) params.set(options.provider === "vndb" ? "vndbId" : "externalId", options.externalId);
-  const response = await fetch(`/api/subject?${params.toString()}`, { headers: { accept: "application/json" } });
+  const response = await fetch(`/api/subject?${params.toString()}`, { signal: options.signal, headers: { accept: "application/json" } });
   return readJson<T>(response);
 }
 
@@ -329,12 +329,12 @@ export type DeviceListPayload = {
   stats: { count: number; active: number; totalInvestment: number };
 };
 
-export async function loadDevices(params: { category?: string; subCategory?: string; status?: string } = {}) {
+export async function loadDevices(params: { category?: string; subCategory?: string; status?: string } = {}, signal?: AbortSignal) {
   const query = new URLSearchParams();
   if (params.category) query.set("category", params.category);
   if (params.subCategory) query.set("subCategory", params.subCategory);
   if (params.status) query.set("status", params.status);
-  const response = await fetch(`/api/devices?${query.toString()}`, { headers: { accept: "application/json" }, cache: "no-store" });
+  const response = await fetch(`/api/devices?${query.toString()}`, { signal, headers: { accept: "application/json" }, cache: "no-store" });
   return readJson<DeviceListPayload>(response);
 }
 

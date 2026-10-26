@@ -24,7 +24,7 @@
 .theme-yuehua .library-search { border-radius: 99px; background: #ffffff99; box-shadow: inset 0 2px 5px #55516c08; }
 .theme-yuehua .overview { border-bottom: 0; }
 .theme-yuehua .overview-copy h1 { color: #35304f; letter-spacing: .04em; }
-.theme-yuehua :is(.collection-summary, .schedule-panel, .modal-card, .detail-drawer) {
+.theme-yuehua :is(.collection-summary, .schedule-panel) {
   background: #f9f8ff; border: 1px solid #ffffff; box-shadow: var(--glass-shadow); border-radius: 24px;
 }
 .theme-yuehua .schedule-panel { padding: 22px; }
@@ -45,7 +45,7 @@
 .theme-yuehua .primary-button { background: linear-gradient(135deg, #cff1ff, var(--primary)); box-shadow: inset 0 1px #ffffffcc, 0 4px 12px #66ccff30; }
 .theme-yuehua .mobile-nav { background: #f7f7ffed; box-shadow: 0 -6px 25px #514a7310; }
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .theme-yuehua :is(.topbar, .collection-summary, .schedule-panel, .modal-card, .detail-drawer, .mobile-nav) {
+  .theme-yuehua :is(.topbar, .collection-summary, .schedule-panel, .mobile-nav) {
     background: var(--glass); -webkit-backdrop-filter: blur(22px) saturate(135%); backdrop-filter: blur(22px) saturate(135%);
   }
   /* Repeated cards use translucent paint without a blur layer per card. */

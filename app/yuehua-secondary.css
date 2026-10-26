@@ -59,14 +59,14 @@
   .calendar-list-row > button, .calendar-grid article button, .security-inline-actions .auth-link, .anilist-card-actions .auth-link,
   .auth-primary, .security-close, .add-search > button) {
   border-radius: 999px; border-color: var(--control-border); background: var(--control-surface);
-  box-shadow: inset 0 1px #ffffffd9, 0 3px 9px #514a730b;
+  box-shadow: var(--control-shadow);
   transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 .theme-yuehua :is(.primary-button, .submit-row .primary-button, .auth-primary, .calendar-source-actions button.primary,
   .calendar-custom-actions button.primary, .add-search > button) {
-  border-color: color-mix(in srgb, var(--primary-strong) 45%, #fff);
-  background: linear-gradient(135deg, #e2f7ff, var(--primary)); color: #183d50;
-  box-shadow: inset 0 1px #ffffffd9, 0 4px 12px #66ccff24;
+  border-color: var(--primary-border);
+  background: var(--primary-surface); color: var(--primary-ink);
+  box-shadow: var(--primary-shadow);
 }
 .theme-yuehua :is(.rounded-select-menu, .sync-menu) { border-radius: 18px; }
 .theme-yuehua .rounded-select-menu button { border-radius: 12px; }

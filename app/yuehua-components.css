@@ -6,6 +6,10 @@
   --control-selected: #f3f0f8;
   --control-selected-border: #d4cede;
   --control-focus: #7b728d;
+  --primary-surface: linear-gradient(135deg, #e2f7ff, var(--primary));
+  --primary-ink: #183d50;
+  --primary-border: color-mix(in srgb, var(--primary-strong) 45%, #fff);
+  --primary-shadow: inset 0 1px #ffffffd9, 0 4px 12px #66ccff24;
   --control-shadow: inset 0 1px #ffffffd9, 0 3px 9px #514a730b;
   --control-duration: .2s;
   --danger-ink: #a03853;
@@ -20,9 +24,9 @@
   transition: background var(--control-duration) ease, border-color var(--control-duration) ease, box-shadow var(--control-duration) ease;
 }
 .theme-yuehua .yuehua-button[data-variant="primary"] {
-  border-color: color-mix(in srgb, var(--primary-strong) 45%, #fff);
-  background: linear-gradient(135deg, #e2f7ff, var(--primary)); color: #183d50;
-  box-shadow: inset 0 1px #ffffffd9, 0 4px 12px #66ccff24;
+  border-color: var(--primary-border);
+  background: var(--primary-surface); color: var(--primary-ink);
+  box-shadow: var(--primary-shadow);
 }
 .theme-yuehua .yuehua-button:is([data-variant="danger"], .manager-delete-button) {
   border-color: var(--danger-border); background: var(--danger-surface); color: var(--danger-ink);
@@ -83,3 +87,19 @@ fieldset.editor-fields { min-inline-size: 0; margin: 0; border: 0; }
 .theme-yuehua .save-notices p { margin: 0; }
 .theme-yuehua .save-notices button { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--control-selected-border); background: #fff; color: var(--ink); cursor: pointer; }
 .theme-yuehua .save-notices button:focus-visible { outline: 2px solid var(--control-focus); outline-offset: 2px; }
+
+/* Bounded pages retain native keyboard navigation and full-result selection. */
+.collection-page-anchor { scroll-margin-top: 90px; outline: none; }
+.collection-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 16px 0; }
+.collection-pagination span { color: var(--muted); font-size: 12px; }
+.collection-pagination button:disabled { opacity: .45; cursor: not-allowed; }
+.panel-notice { max-width: 360px; text-align: center; }
+@supports (content-visibility: auto) {
+  .anime-grid > .anime-card, .device-grid > .device-card { content-visibility: auto; contain-intrinsic-block-size: auto 420px; }
+  .anime-grid > .anime-list-row, .anime-grid > .music-list-row, .device-grid > .device-list-row { content-visibility: auto; contain-intrinsic-block-size: auto 90px; }
+  /* Focused controls must remain visible, including after scrolling with Tab. */
+  .anime-grid > :focus-within, .device-grid > :focus-within { content-visibility: visible; }
+}
+@media print {
+  .anime-grid > *, .device-grid > * { content-visibility: visible; }
+}
