@@ -38,16 +38,25 @@ async function request<T>(query: string, variables: Record<string, unknown>, opt
     body: JSON.stringify({ query, variables }),
     signal: options.signal || AbortSignal.timeout(9000),
   });
-  const payload = await response.json().catch(() => ({})) as { data?: T; errors?: Array<{ message?: string }> };
-  if (!response.ok || payload.errors?.length) {
-    throw new AniListApiError(`AniList 返回 ${response.status}${payload.errors?.[0]?.message ? `：${payload.errors[0].message}` : ""}`, response.status);
+  let value: unknown;
+  try { value = await response.json(); } catch {
+    throw new AniListApiError(`AniList 返回 ${response.status}：响应不是有效的 JSON`, response.ok ? 502 : response.status);
   }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AniListApiError("AniList 返回了无效的数据", response.ok ? 502 : response.status);
+  }
+  const payload = value as { data?: T; errors?: Array<{ message?: string }> };
+  if (!response.ok || payload.errors?.length) {
+    throw new AniListApiError(`AniList 返回 ${response.status}${payload.errors?.[0]?.message ? `：${payload.errors[0].message}` : ""}`, response.ok ? 502 : response.status);
+  }
+  if (!payload.data || typeof payload.data !== "object" || Array.isArray(payload.data)) throw new AniListApiError("AniList 返回了无效的数据", 502);
   return payload.data as T;
 }
 
 export async function searchAniList(query: string, media: "ANIME" | "MANGA", options: AniListRequestOptions = {}) {
   const data = await request<{ Page?: { media?: AniListMedia[] } }>(`query ($search: String!, $type: MediaType!) { Page(page: 1, perPage: 8) { media(search: $search, type: $type, sort: SEARCH_MATCH) { ${MEDIA_FIELDS} } } }`, { search: query.trim().slice(0, 80), type: media }, options);
-  return data.Page?.media || [];
+  if (!Array.isArray(data.Page?.media)) throw new AniListApiError("AniList 返回了无效的搜索结果", 502);
+  return data.Page.media;
 }
 
 export async function getAniListMedia(id: string | number, options: AniListRequestOptions = {}) {

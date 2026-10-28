@@ -30,7 +30,7 @@
   .detail-source-links, .detail-storage-links, .detail-storage-editor, .detail-storage-body > article,
   .gallery-images-field, .gallery-image-editor article, .subcategory-sort-list > div, .subcategory-sort-list > article,
   .tag-manager-row, .tag-manager-cloud-item, .calendar-grid article, .calendar-week-group > div, .calendar-custom-form,
-  .detail-personal-rating, .detail-rating-field, .source-suggestion, .lookup-results, .tag-merge-banner) {
+  .detail-personal-rating, .source-suggestion, .lookup-results, .tag-merge-banner) {
   min-width: 0; border-color: var(--glass-border); border-radius: 16px;
   background: var(--glass-inset); box-shadow: inset 0 1px #ffffffd9, 0 4px 14px #514a7308;
 }
@@ -149,7 +149,7 @@
 }
 .theme-yuehua :is(.tag-library-chips button.active, .tag-manager-cloud-item.active, .tag-manager-actions button.active,
   .device-chips button.active, .all-status.active, .batch-select-trigger.active, .rounded-select-menu button.active,
-  .sort-filter-bar label.active, .library-filters label.active, .music-filter-bar label.active, .calendar-filters label.active,
+  .sort-filter-bar label.active, .music-filter-bar label.active, .calendar-filters label.active,
   .sync-type-options button.active, .source-sync-toggle:has(input:checked)) {
   border-color: var(--control-selected-border); background: linear-gradient(135deg, #ffffffed, var(--control-selected));
   box-shadow: inset 0 1px #fff; color: var(--ink);

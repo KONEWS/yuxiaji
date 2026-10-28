@@ -11,7 +11,14 @@ export class MangaDexApiError extends Error {
 
 async function request<T>(path: string, options: MangaDexRequestOptions = {}) {
   const response = await fetch(`${MANGADEX_API_BASE}${path}`, { headers: { accept: "application/json" }, signal: options.signal || AbortSignal.timeout(9000) });
-  const payload = await response.json().catch(() => ({})) as T & { errors?: Array<{ detail?: string }> };
+  let value: unknown;
+  try { value = await response.json(); } catch {
+    throw new MangaDexApiError(`MangaDex 返回 ${response.status}：响应不是有效的 JSON`, response.ok ? 502 : response.status);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new MangaDexApiError("MangaDex 返回了无效的数据", response.ok ? 502 : response.status);
+  }
+  const payload = value as T & { errors?: Array<{ detail?: string }> };
   if (!response.ok) throw new MangaDexApiError(`MangaDex 返回 ${response.status}${payload.errors?.[0]?.detail ? `：${payload.errors[0].detail}` : ""}`, response.status);
   return payload;
 }
@@ -19,7 +26,8 @@ async function request<T>(path: string, options: MangaDexRequestOptions = {}) {
 export async function searchMangaDex(query: string, options: MangaDexRequestOptions = {}) {
   const params = new URLSearchParams({ title: query.trim().slice(0, 80), limit: "8", "contentRating[]": "safe", "includes[]": "cover_art" });
   const payload = await request<{ data?: MangaDexManga[] }>(`/manga?${params.toString()}`, options);
-  return payload.data || [];
+  if (!Array.isArray(payload.data)) throw new MangaDexApiError("MangaDex 返回了无效的搜索结果", 502);
+  return payload.data;
 }
 
 export async function getMangaDexManga(id: string, options: MangaDexRequestOptions = {}) {

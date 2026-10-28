@@ -184,9 +184,6 @@ function editableSubject(row: typeof userSubjects.$inferSelect): Record<string, 
     twitterSource: row.twitterSource,
     characterTags: [],
     metadata,
-    platform: metadata.platform,
-    creator: metadata.creator,
-    duration: metadata.duration,
   };
 }
 

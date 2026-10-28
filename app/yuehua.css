@@ -57,7 +57,6 @@
 @media (max-width: 680px) {
   .theme-yuehua :is(.anime-card, .device-card) { border-radius: 15px; }
   .theme-yuehua .schedule-panel { padding: 16px; }
-  .theme-yuehua .modal-card { border-radius: 22px 22px 0 0; }
   .theme-yuehua .detail-drawer { border-radius: 0; border: 0; }
   .theme-yuehua :is(.topbar, .mobile-nav) { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 }

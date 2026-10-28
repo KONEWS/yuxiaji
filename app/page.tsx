@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { ClientApiError, customBackgroundUrl, fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, loadDevices, loadMedia, loadTrackerState, removeDevice, removeMedia, saveDevice, saveMedia, saveTrackerState, searchRemoteAnime, uploadAvatar, uploadCustomBackground, uploadMediaImage, type MediaRecordPayload, type MediaUpdatePayload } from "./lib/client-api";
+import { ClientApiError, customBackgroundUrl, fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, loadDevices, loadMedia, loadTrackerState, removeDevice, removeMedia, saveDevice, saveMedia, saveTrackerState, searchRemoteAnime, uploadAvatar, uploadCustomBackground, uploadMediaImage, type DevicePayload, type MediaRecordPayload, type MediaUpdatePayload } from "./lib/client-api";
 import { defaultDeviceCategoryLabels, defaultDeviceSubCategories, defaultSyncSettings, defaultTagPreferences, defaultVideoSubtypeLabels, defaultVisualSubtypeLabels, deviceCategoriesForPreferences, isCollectionMediaType, normalizeDeviceCategoryLabels, normalizeDeviceSubCategories, normalizeMediaMetadata, normalizeMediaType, normalizeSyncSettings, normalizeTagPreferences, normalizeVideoSubtype, normalizeVideoSubtypeLabels, normalizeVisualSubtype, normalizeVisualSubtypeLabels, tagDisplayName, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap, type SyncField, type SyncProvider, type SyncSettings, type TagPreferences, type VideoSubtypeLabels, type VisualSubtypeLabels } from "./lib/constants";
 import { CollectionSummary } from "./components/tracker/collection-summary";
 import { DeviceLibrary, normalizeDevice as normalizeLibraryDevice } from "./components/tracker/device-library";
@@ -10,7 +10,7 @@ import { DeviceModal, DeviceSubCategoryModal, ReceiptModal, AddModal, CalendarMo
 import { LazyPanel } from "./components/tracker/lazy-panel";
 import { flushClientCache, queueClientCache } from "./lib/client-cache";
 import { archivedCounts, defaultCollections, defaultMediaOrder, formatBeijingTime, mediaSettings, normalizeMediaOrder, sanitizeCollectionName, scoreLabels, splitTags } from "./lib/tracker-data";
-import { changedFields, mergePendingChanges, PreferenceWriter } from "./lib/client-save-state";
+import { changedFields, DeviceDraftWriter, mergePendingChanges, PreferenceWriter } from "./lib/client-save-state";
 import { calendarSourceTokens, calendarEntryMatches, isTrackedCalendarEntry, setCalendarTracking } from "./lib/calendar-tracking";
 import { refreshBangumiRecords } from "./lib/agent-hikari";
 import { normalizeMediaSource } from "./lib/media-source";
@@ -272,6 +272,9 @@ export default function Home() {
   const createRequests = useRef(new Map<number, { key: string; payload: MediaRecordPayload }>());
   const addDraftId = useRef<number | null>(null);
   const detailRequest = useRef(0);
+  const selectedDetailRequest = useRef<AbortController | null>(null);
+  const deviceDraftWriter = useRef(new DeviceDraftWriter());
+  const deviceDeletes = useRef(new Set<number>());
   const [tagPreferences, setTagPreferences] = useState<TagPreferences>(() => normalizeTagPreferences(readClientCache<unknown>(TAG_PREFERENCES_KEY) || defaultTagPreferences()));
   const [bangumiSyncTypes, setBangumiSyncTypes] = useState<MediaType[]>(["anime", "game", "light_novel", "manga", "music"]);
   const [syncSettings, setSyncSettings] = useState<SyncSettings>(() => defaultSyncSettings());
@@ -747,6 +750,7 @@ export default function Home() {
     }
   };
   const removePersistedAnime = async (id: number): Promise<boolean> => {
+    if (!stateLoaded || mediaLoadError) { setToast("请等待收藏读取成功后再删除；读取失败时请重新加载。"); return false; }
     const queueId = mediaLocalIds.current.get(id) || id;
     // Invalidate any in-flight save before waiting, so its response cannot
     // repopulate an item that the user has just removed.
@@ -782,6 +786,7 @@ export default function Home() {
     }
   };
   const deleteSelectedAnime = async (ids: number[]) => {
+    if (!stateLoaded || mediaLoadError) { setToast("请等待收藏读取成功后再删除；读取失败时请重新加载。"); return false; }
     const uniqueIds = Array.from(new Set(ids)).filter((id) => anime.some((item) => item.id === id));
     if (!uniqueIds.length) return false;
     if (!window.confirm(`确定删除选中的 ${uniqueIds.length} 个收藏吗？删除后无法恢复。`)) return false;
@@ -891,7 +896,14 @@ export default function Home() {
     setAnime((items) => items.map((item) => item.id === completionId ? { ...item, progress: item.total, status: "finished", updatedAt: now } : item));
     closeSecondary(() => setActiveStatus("finished"));
   };
+  useEffect(() => () => {
+    selectedDetailRequest.current?.abort();
+    selectedDetailRequest.current = null;
+  }, [modal, addForm.mediaType]);
   const chooseSearch = async (result: SearchResult) => {
+    selectedDetailRequest.current?.abort();
+    const controller = new AbortController();
+    selectedDetailRequest.current = controller;
     const mediaType = addForm.mediaType;
     const isTmdb = result.source === "tmdb" && (mediaType === "movie" || mediaType === "tv");
     const isVndb = result.source === "vndb" && mediaType === "game";
@@ -918,7 +930,8 @@ export default function Home() {
     setSearchResults([]);
     if (isBangumi === false && !isTmdb && !isVndb && !externalId) return;
     try {
-      const detail = await fetchSubjectDetail<SearchResult & { summary?: string; score?: number; metadata?: AddForm["metadata"] }>(selectedId, undefined, mediaType, isTmdb ? { provider: "tmdb", externalId: String(selectedId) } : isBangumi ? {} : { provider, externalId });
+      const detail = await fetchSubjectDetail<SearchResult & { summary?: string; score?: number; metadata?: AddForm["metadata"] }>(selectedId, undefined, mediaType, isTmdb ? { provider: "tmdb", externalId: String(selectedId), signal: controller.signal } : isBangumi ? { signal: controller.signal } : { provider, externalId, signal: controller.signal });
+      if (controller.signal.aborted) return;
       setAddForm((form) => form.mediaType === mediaType ? {
         ...form,
         title: detail.title || form.title,
@@ -930,10 +943,11 @@ export default function Home() {
         metadata: normalizeMediaMetadata({ ...form.metadata, ...(detail.metadata || {}), sources: { ...(form.metadata.sources || {}), ...(detail.metadata?.sources || {}), ...(externalId ? { [provider]: externalId } : {}) }, overview: detail.overview || detail.summary || form.metadata.overview, overviewOverride: false, ...(isVndb ? { vndbId: detail.externalId || result.externalId || result.metadata?.vndbId, vndbUrl: result.externalId ? `https://vndb.org/${result.externalId}` : result.metadata?.vndbUrl, provider: "vndb" } : isTmdb ? { tmdbId: detail.tmdbId || selectedId, backdropImage: detail.backdropImage, originalTitle: detail.originalTitle || detail.jp, genres: detail.genres, provider: "tmdb" } : {}) }),
       } : form);
     } catch {
-      setToast(`${provider} 详情读取失败，已保留搜索结果`);
+      if (!controller.signal.aborted) setToast(`${provider} 详情读取失败，已保留搜索结果`);
     }
   };
   const openDeviceEditor = (device: Device | null) => {
+    deviceDraftWriter.current = new DeviceDraftWriter();
     setDeviceDraft(device);
     setDeviceForm(device ? {
       name: device.name, category: device.category, subCategory: device.subCategory, status: device.status,
@@ -950,7 +964,8 @@ export default function Home() {
   };
   const submitDevice = async () => {
     if (!deviceForm) return;
-    if (!deviceForm.name.trim()) { setToast("请填写设备名称"); return; }
+    if (!devicesPersistable) throw new Error("请等待藏品读取成功后再保存；读取失败时请重新加载。");
+    if (!deviceForm.name.trim()) throw new Error("请填写设备名称");
     const device: Device = {
       id: deviceDraft?.id || Date.now(),
       name: deviceForm.name.trim(),
@@ -971,27 +986,24 @@ export default function Home() {
       updatedAt: Date.now(),
     };
     const isNew = !deviceDraft;
-    const localId = device.id;
-    setDevices((items) => isNew ? [device, ...items] : items.map((item) => item.id === localId ? device : item));
+    const requested: DevicePayload = { id: deviceDraft?.id, name: device.name, category: device.category, subCategory: device.subCategory, status: device.status, price: device.price, currency: device.currency, purchaseDate: device.purchaseDate, receiptImage: device.receiptImage, coverImage: device.coverImage, coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom, tags: device.tags, rating: device.rating, review: device.review };
+    const saved = normalizeLibraryDevice(await deviceDraftWriter.current.save(requested, saveDevice));
+    setDevices((items) => items.some((item) => item.id === saved.id) ? items.map((item) => item.id === saved.id ? saved : item) : [saved, ...items]);
     closeSecondary();
     setToast(isNew ? "设备已加入藏品库" : "设备信息已更新");
-    if (!devicesPersistable) return;
-    try {
-      const payload = await saveDevice({ id: deviceDraft?.id, name: device.name, category: device.category, subCategory: device.subCategory, status: device.status, price: device.price, currency: device.currency, purchaseDate: device.purchaseDate, receiptImage: device.receiptImage, coverImage: device.coverImage, coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom, tags: device.tags, rating: device.rating, review: device.review });
-      if (payload?.device) setDevices((items) => items.map((item) => item.id === localId ? normalizeLibraryDevice(payload.device) : item));
-    } catch {
-      setDevicesPersistable(false);
-      setToast("云端暂不可用，设备已保存在本页");
-    }
   };
   const deleteDevice = async (id: number) => {
-    setDevices((items) => items.filter((item) => item.id !== id));
-    setToast("设备已移出藏品库");
-    if (!devicesPersistable) return;
+    if (!devicesPersistable) { setToast("请等待藏品读取成功后再删除；读取失败时请重新加载。"); return; }
+    if (deviceDeletes.current.has(id)) return;
+    deviceDeletes.current.add(id);
     try {
       await removeDevice(id);
-    } catch {
-      setDevicesPersistable(false);
+      setDevices((items) => items.filter((item) => item.id !== id));
+      setToast("设备已移出藏品库");
+    } catch (error) {
+      setToast(error instanceof Error ? `删除未确认：${error.message}` : "设备删除失败，请核对云端后重试");
+    } finally {
+      deviceDeletes.current.delete(id);
     }
   };
   const openReceipt = (device: Device) => { setReceiptPreview(device); setModal("receipt"); };
@@ -1228,7 +1240,7 @@ export default function Home() {
     {modal === "detail" && detailId !== null && anime.find((item) => item.id === detailId) && <DetailDrawer key={detailId} item={anime.find((item) => item.id === detailId)!} collections={collections} close={() => { discardDetailEdits(detailId); closeSecondary(); }} save={saveDetails} remove={removeAnime} uploadImage={uploadImageAsset} imageUploading={thumbnailUploading} visualSubtypeLabels={visualSubtypeLabels} videoSubtypeLabels={videoSubtypeLabels} syncSettings={syncSettings} />}
     {modal === "visual_subtypes" && <VisualSubtypeModal labels={visualSubtypeLabels} close={closeVisualSubtypeManager} save={(labels) => { const returnTo = visualSubtypeReturn; const nextLabels = normalizeVisualSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVisualSubtypeLabels(nextLabels); setVisualSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype)); setAnime((items) => items.map((item) => item.mediaType === "visual" && item.visualSubtype && !allowed.has(item.visualSubtype) ? { ...item, visualSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { saveInBackground({ ...item, visualSubtype: "other", updatedAt: Date.now() }); }); setVisualSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("画廊子类型已保存"); }} />}
     {modal === "video_subtypes" && <VideoSubtypeModal labels={videoSubtypeLabels} close={closeVideoSubtypeManager} save={(labels) => { const returnTo = videoSubtypeReturn; const nextLabels = normalizeVideoSubtypeLabels(labels); const allowed = new Set(Object.keys(nextLabels)); setVideoSubtypeLabels(nextLabels); setVideoSubtype((current) => current !== "all" && !allowed.has(current) ? "all" : current); const affected = anime.filter((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype)); setAnime((items) => items.map((item) => item.mediaType === "video" && item.videoSubtype && !allowed.has(item.videoSubtype) ? { ...item, videoSubtype: "other", updatedAt: Date.now() } : item)); affected.forEach((item) => { saveInBackground({ ...item, videoSubtype: "other", updatedAt: Date.now() }); }); setVideoSubtypeReturn(null); closeSecondary(() => { if (returnTo === "add") setModal("add"); }); setToast("视频子分类已保存"); }} />}
-    {modal === "device" && deviceForm && <DeviceModal form={deviceForm} setForm={setDeviceForm} device={deviceDraft} categories={deviceCategories} subCategories={deviceSubCategories} close={() => closeSecondary()} submit={() => void submitDevice()} />}
+    {modal === "device" && deviceForm && <DeviceModal form={deviceForm} setForm={setDeviceForm} device={deviceDraft} categories={deviceCategories} subCategories={deviceSubCategories} close={() => closeSecondary()} submit={submitDevice} />}
     {modal === "device_categories" && <DeviceSubCategoryModal value={deviceSubCategories} categoryLabels={deviceCategoryLabels} initialCategory={deviceCategoryManagerTab} close={() => closeSecondary()} toast={setToast} save={(value, labels) => { const nextLabels = normalizeDeviceCategoryLabels(labels); const nextCategories = deviceCategoriesForPreferences(nextLabels, value); setDeviceSubCategories(value); setDeviceCategoryLabels(nextLabels); if (deviceCategoryTab !== "all" && !nextCategories.some((category) => category.id === deviceCategoryTab)) setDeviceCategoryTab("all"); if (deviceCategoryManagerTab && !nextCategories.some((category) => category.id === deviceCategoryManagerTab)) setDeviceCategoryManagerTab(nextCategories[0]?.id || "audio"); if (deviceSubCategory !== "all" && !Object.values(value).flat().includes(deviceSubCategory)) setDeviceSubCategory("all"); closeSecondary(); setToast("设备分类名称与子类顺序已保存"); }} />}
     {modal === "receipt" && receiptPreview && <ReceiptModal device={receiptPreview} close={() => closeSecondary()} />}
     </LazyPanel>

@@ -355,7 +355,7 @@ async function manage(request: Request) {
   }
   const grants = await getDb().select({ grant: mcpOAuthGrants, clientName: mcpOAuthClients.clientName }).from(mcpOAuthGrants).innerJoin(mcpOAuthClients, eq(mcpOAuthGrants.clientId, mcpOAuthClients.clientId)).where(and(eq(mcpOAuthGrants.userKey, owner), isNull(mcpOAuthGrants.revokedAt))).orderBy(desc(mcpOAuthGrants.createdAt));
   const csrf = await csrfToken(request, current);
-  const rows = grants.map(({ grant, clientName }) => `<section class="grant"><h2>${escape(clientName)}</h2><p><small>授权时间：${escape(grant.createdAt.toLocaleString("zh-CN", { timeZone: "Asia/Hong_Kong" }))}（香港时间）</small></p>${permissionList(storedScopes(grant.scopesJson))}${grant.revokedAt ? "<p>已撤销</p>" : `<form method="post"><input type="hidden" name="csrf_token" value="${escape(csrf)}"><input type="hidden" name="grant_id" value="${escape(grant.id)}"><button type="submit" name="action" value="revoke">撤销连接</button></form>`}</section>`).join("");
+  const rows = grants.map(({ grant, clientName }) => `<section class="grant"><h2>${escape(clientName)}</h2><p><small>授权时间：${escape(grant.createdAt.toLocaleString("zh-CN", { timeZone: "Asia/Hong_Kong" }))}（香港时间）</small></p>${permissionList(storedScopes(grant.scopesJson))}<form method="post"><input type="hidden" name="csrf_token" value="${escape(csrf)}"><input type="hidden" name="grant_id" value="${escape(grant.id)}"><button type="submit" name="action" value="revoke">撤销连接</button></form></section>`).join("");
   return html("管理 ChatGPT 连接", `<h1>管理 ChatGPT 连接</h1><p>以下列出所有未撤销的连接。撤销后，该授权的访问令牌和续期令牌立即失效。后续使用需要重新登录并授权。</p>${rows || "<p>目前没有未撤销的连接。</p>"}<p><a href="/">返回月下集</a></p>`);
 }
 

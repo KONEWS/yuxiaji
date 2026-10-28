@@ -2,34 +2,51 @@
 
 import { ActionButton, DialogActions, DialogHeading } from "./ui";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useDialogBehavior } from "./use-dialog-behavior";
 import { uploadDeviceAsset } from "../../lib/client-api";
 import { DEVICE_STATUSES, type DeviceCategoryDefinition, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap } from "../../lib/constants";
 import type { Device, DeviceForm } from "../../lib/tracker-types";
 import { CoverPositionEditor, RoundedSelect } from "./common";
 
-function DeviceModal({ form, setForm, device, categories, subCategories, close, submit }: { form: DeviceForm; setForm: (form: DeviceForm) => void; device: Device | null; categories: DeviceCategoryDefinition[]; subCategories: DeviceSubCategoryMap; close: () => void; submit: () => void }) {
+function DeviceModal({ form, setForm, device, categories, subCategories, close, submit }: { form: DeviceForm; setForm: Dispatch<SetStateAction<DeviceForm | null>>; device: Device | null; categories: DeviceCategoryDefinition[]; subCategories: DeviceSubCategoryMap; close: () => void; submit: () => Promise<void> }) {
   const receiptInput = useRef<HTMLInputElement>(null);
   const coverInput = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState<"receipt" | "cover" | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const saveInFlight = useRef(false);
+  const [initialForm] = useState(() => JSON.stringify(form));
+  const busy = saving || uploading !== null;
+  const dirty = initialForm !== JSON.stringify(form);
+  const { dialogRef, requestClose } = useDialogBehavior<HTMLFieldSetElement>({ close, dirty, busy });
+  const submitForm = async () => {
+    if (saveInFlight.current || uploading) return;
+    saveInFlight.current = true;
+    setSaving(true);
+    setSaveError("");
+    try { await submit(); }
+    catch (error) { setSaveError(error instanceof Error ? error.message : "保存失败，草稿已保留，请重试"); }
+    finally { saveInFlight.current = false; setSaving(false); }
+  };
   const upload = async (file: File | undefined, purpose: "receipt" | "cover") => {
-    if (!file) return;
+    if (!file || busy) return;
     setUploading(purpose);
     try {
       const payload = await uploadDeviceAsset(file, purpose);
-      setForm({
-        ...form,
+      setForm((current) => current ? {
+        ...current,
         [purpose === "receipt" ? "receiptImage" : "coverImage"]: payload.url,
         ...(purpose === "cover" ? { coverPositionX: 50, coverPositionY: 50, coverZoom: 100 } : {}),
-      });
+      } : current);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "图片上传失败，可改用图片地址");
     } finally {
       setUploading(null);
     }
   };
-  return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}><section className="modal-card device-modal" role="dialog" aria-modal="true" aria-labelledby="device-title">
-    <DialogHeading eyebrow="藏品库" title={device ? "编辑设备" : "添加设备"} id="device-title" onClose={close} closeLabel="关闭" />
+  return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><fieldset ref={dialogRef} tabIndex={-1} disabled={busy} className="modal-card device-modal editor-dialog" role="dialog" aria-modal="true" aria-labelledby="device-title" aria-busy={busy}>
+    <DialogHeading eyebrow="藏品库" title={device ? "编辑设备" : "添加设备"} id="device-title" onClose={requestClose} disabled={busy} closeLabel="关闭" />
     <div className="form-grid">
       <label className="wide">设备名称<input autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="例如：雷鸟 GT Max" /></label>
       <label>大类<RoundedSelect value={form.category} onChange={(category) => setForm({ ...form, category, subCategory: subCategories[category]?.includes(form.subCategory) ? form.subCategory : "" })} options={categories.map((item) => ({ value: item.id, label: item.label }))} ariaLabel="设备大类" /></label>
@@ -43,8 +60,9 @@ function DeviceModal({ form, setForm, device, categories, subCategories, close, 
       <label className="wide">购买凭证截图<input type="url" value={form.receiptImage} onChange={(event) => setForm({ ...form, receiptImage: event.target.value })} placeholder="订单截图地址，或从本地上传" /><input ref={receiptInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "receipt")} /><ActionButton type="button" className="upload-button" onClick={() => receiptInput.current?.click()} disabled={uploading === "receipt"}>{uploading === "receipt" ? "上传中…" : "上传凭证"}</ActionButton>{form.receiptImage && <span className="cover-preview"><img src={form.receiptImage} alt="凭证预览" referrerPolicy="no-referrer" /><b>已上传凭证</b></span>}</label>
       <label className="wide">评价<textarea value={form.review} onChange={(event) => setForm({ ...form, review: event.target.value })} placeholder="使用感受、购入理由…" /></label>
     </div>
-    <DialogActions><ActionButton onClick={close}>取消</ActionButton><ActionButton variant="primary" onClick={submit}>{device ? "保存修改" : "加入藏品库"}</ActionButton></DialogActions>
-  </section></div>;
+    {saveError && <p className="detail-save-error" role="alert">{saveError}</p>}
+    <DialogActions><ActionButton onClick={requestClose} disabled={busy}>取消</ActionButton><ActionButton variant="primary" onClick={() => void submitForm()} disabled={busy}>{saving ? "保存中…" : device ? "保存修改" : "加入藏品库"}</ActionButton></DialogActions>
+  </fieldset></div>;
 }
 
 function DeviceSubCategoryModal({ value, categoryLabels, initialCategory, close, save, toast }: { value: DeviceSubCategoryMap; categoryLabels: DeviceCategoryLabels; initialCategory: DeviceCategoryId; close: () => void; save: (value: DeviceSubCategoryMap, labels: DeviceCategoryLabels) => void; toast: (value: string) => void }) {

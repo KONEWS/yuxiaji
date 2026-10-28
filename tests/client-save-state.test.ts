@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { DevicePayload } from "../app/lib/client-api";
 // @ts-expect-error Node's TypeScript loader requires an explicit extension.
-import { changedFields, mergePendingChanges, PreferenceWriter } from "../app/lib/client-save-state.ts";
+import { changedFields, DeviceDraftWriter, mergePendingChanges, PreferenceWriter } from "../app/lib/client-save-state.ts";
 
 test("a failed initial preference read never writes cached defaults", async () => {
   const writer = new PreferenceWriter<{ font: string; collections: string[] }>();
@@ -66,4 +67,58 @@ test("a retry can explicitly clear a value from an earlier failed edit", () => {
     { score: 8, images: [{ id: 1 }] },
     { score: null, images: [] },
   ]), { score: null, images: [] });
+});
+
+const deviceDraft = { name: "测试设备", category: "audio", subCategory: "耳机", status: "active" as const, tags: [] };
+
+test("lost device creation responses replay the original key and preserve newer draft changes", async () => {
+  const writer = new DeviceDraftWriter();
+  const calls: Array<{ id?: number; idempotencyKey?: string; name: string }> = [];
+  const write = async (payload: DevicePayload) => {
+    calls.push(payload);
+    if (calls.length === 1) throw new Error("response lost after insert");
+    return { device: { ...payload, id: 18 } };
+  };
+  await assert.rejects(writer.save(deviceDraft, write), /response lost/);
+  const updated = { ...deviceDraft, name: "修改后的设备" };
+  assert.equal((await writer.save(updated, write)).name, updated.name);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[1], calls[0]);
+  assert.ok(calls[0].idempotencyKey);
+  assert.equal(calls[2].id, 18);
+  assert.equal(calls[2].idempotencyKey, undefined);
+  assert.equal(calls[2].name, updated.name);
+});
+
+test("a failed update after device recovery retains the confirmed ID for retry", async () => {
+  const writer = new DeviceDraftWriter();
+  const calls: Array<{ id?: number; idempotencyKey?: string }> = [];
+  const write = async (payload: DevicePayload) => {
+    calls.push(payload);
+    if (calls.length === 1 || calls.length === 3) throw new Error("offline");
+    return { device: { ...payload, id: 19 } };
+  };
+  await assert.rejects(writer.save(deviceDraft, write), /offline/);
+  const updated = { ...deviceDraft, name: "新名称" };
+  await assert.rejects(writer.save(updated, write), /offline/);
+  await writer.save(updated, write);
+  assert.equal(calls.length, 4);
+  assert.equal(calls[3].id, 19);
+  assert.equal(calls[3].idempotencyKey, undefined);
+});
+
+test("editing an existing device does not create a new idempotent operation", async () => {
+  const writer = new DeviceDraftWriter();
+  let submitted: object | undefined;
+  const expected = { ...deviceDraft, id: 20 };
+  await writer.save(expected, async (payload) => {
+    submitted = payload;
+    return { device: { ...payload, id: 20 } };
+  });
+  assert.deepEqual(submitted, expected);
+});
+
+test("an unconfirmed device response cannot be presented as a successful save", async () => {
+  const writer = new DeviceDraftWriter();
+  await assert.rejects(writer.save(deviceDraft, async (payload) => ({ device: { ...payload, id: 0 } })), /服务器未确认/);
 });

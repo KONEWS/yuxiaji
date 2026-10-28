@@ -306,6 +306,7 @@ export function customBackgroundUrl(version: number) {
 }
 
 export type DevicePayload = {
+  idempotencyKey?: string;
   id?: number;
   name: string;
   category: DeviceCategoryId;
