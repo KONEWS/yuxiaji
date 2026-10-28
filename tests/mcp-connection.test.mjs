@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import wrangler from "wrangler";
@@ -363,6 +363,30 @@ before(async () => {
   deletable = await connection("content:read content:write content:delete offline_access");
 });
 after(async () => { await worker?.stop(); });
+
+test("concurrent valid 2FA submissions consume a pending challenge only once", async () => {
+  const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+  const [account] = await query("SELECT two_factor_enabled,totp_secret FROM admin_account WHERE id=1");
+  const [before] = await query("SELECT COUNT(*) AS count FROM admin_sessions WHERE pending=0");
+  try {
+    await sql([`UPDATE admin_account SET two_factor_enabled=1,totp_secret='${secret}' WHERE id=1`]);
+    const challenge = await fetchLocal("/__test/session?pending=1", { method: "POST" });
+    assert.equal(challenge.status, 200);
+    const cookie = challenge.headers.get("set-cookie").split(";")[0];
+    const counter = Buffer.alloc(8);
+    counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+    const digest = createHmac("sha1", "12345678901234567890").update(counter).digest();
+    const offset = digest[digest.length - 1] & 15;
+    const code = String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+    const responses = await jsonRequest("/__test/2fa-concurrent", { code }, { cookie, origin });
+    assert.deepEqual((await responses.json()).sort(), [200, 401, 401]);
+    const [after] = await query("SELECT COUNT(*) AS count FROM admin_sessions WHERE pending=0");
+    assert.equal(after.count, before.count + 1, "only the request that consumes the challenge creates a session");
+    assert.equal((await jsonRequest("/api/auth/2fa", { code }, { cookie, origin })).status, 401, "consumed challenge cannot be replayed");
+  } finally {
+    await sql([`UPDATE admin_account SET two_factor_enabled=${account.two_factor_enabled},totp_secret='${account.totp_secret.replaceAll("'", "''")}' WHERE id=1`]);
+  }
+});
 
 test("OAuth discovery binds issuer and resource and advertises S256 and offline access", async () => {
   for (const path of ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {

@@ -2,17 +2,13 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-
-type Status = { initialized: boolean; authenticated: boolean; account?: { username: string; mustChangePassword: boolean } | null };
-
-function safeNext(value: string | null) {
-  return value?.startsWith("/") && !value.startsWith("//") ? value : "/";
-}
+import { readLoginStatus, safeLoginNext, type LoginStatus } from "../lib/login-flow";
 
 export default function LoginPage() {
   const router = useRouter();
   const search = useSearchParams();
-  const [status, setStatus] = useState<Status | null>(null);
+  const [status, setStatus] = useState<LoginStatus | null>(null);
+  const [statusAttempt, setStatusAttempt] = useState(0);
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -23,20 +19,21 @@ export default function LoginPage() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/auth/status", { cache: "no-store" })
-      .then((response) => response.json() as Promise<Status>)
+    const controller = new AbortController();
+    fetch("/api/auth/status", { cache: "no-store", signal: controller.signal })
+      .then(readLoginStatus)
       .then((nextStatus) => {
         if (!active) return;
         if (nextStatus.authenticated) {
-          const destination = safeNext(search.get("next"));
+          const destination = safeLoginNext(search.get("next"));
           router.replace(nextStatus.account?.mustChangePassword ? "/settings/security?force=1" : destination);
           return;
         }
         setStatus(nextStatus);
       })
       .catch(() => { if (active) setMessage("认证服务暂时不可用"); });
-    return () => { active = false; };
-  }, [router, search]);
+    return () => { active = false; controller.abort(); };
+  }, [router, search, statusAttempt]);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setMessage("");
@@ -47,7 +44,7 @@ export default function LoginPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "登录失败");
       if (payload.requires2fa) { setStage("2fa"); setCode(""); return; }
-      router.replace(payload.account?.mustChangePassword ? "/settings/security?force=1" : safeNext(search.get("next")));
+      router.replace(payload.account?.mustChangePassword ? "/settings/security?force=1" : safeLoginNext(search.get("next")));
     } catch (error) { setMessage(error instanceof Error ? error.message : "登录失败"); }
     finally { setBusy(false); }
   }
@@ -63,7 +60,7 @@ export default function LoginPage() {
     finally { setBusy(false); }
   }
 
-  if (!status) return <main className="auth-page"><section className="auth-card"><p>月下集</p><h1>正在检查管理员状态</h1></section></main>;
+  if (!status) return <main className="auth-page"><section className="auth-card"><p>月下集</p><h1>{message ? "暂时无法读取登录状态" : "正在检查管理员状态"}</h1>{message && <><p className="auth-message" role="alert">{message}</p><button type="button" className="auth-primary" onClick={() => { setMessage(""); setStatusAttempt((attempt) => attempt + 1); }}>重新尝试</button></>}</section></main>;
   return <main className="auth-page"><section className="auth-card">
     <p className="auth-kicker">月下集 · 私人收藏</p><h1>{stage === "2fa" ? "输入验证码" : "管理员登录"}</h1>
     {stage === "2fa" ? <p className="auth-help">打开验证器，输入当前 6 位 TOTP；也可以输入一个恢复码。</p> : <p className="auth-help">此站点只允许一个管理员账号，浏览器数据不会保存登录令牌。</p>}

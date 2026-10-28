@@ -2,6 +2,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { userDevices } from "../../../db/schema";
 import { getCurrentUser } from "../../lib/current-user";
+import { finishAgentOperation, reserveAgentOperation } from "../../lib/agent-operations";
 
 const DEVICE_STATUSES = ["active", "backup", "retired"];
 const CURRENCIES = ["CNY"];
@@ -50,7 +51,8 @@ export function sanitizeDevice(body: Record<string, unknown>) {
   const subCategory = typeof body.subCategory === "string" ? body.subCategory.trim().slice(0, 30) : "";
   const status = DEVICE_STATUSES.includes(body.status as string) ? body.status as string : "active";
   const currency = CURRENCIES.includes(body.currency as string) ? body.currency as string : "CNY";
-  const price = Number(body.price);
+  const price = body.price === null || body.price === undefined || typeof body.price === "string" && !body.price.trim()
+    ? NaN : Number(body.price);
   const purchaseDate = typeof body.purchaseDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.purchaseDate) ? body.purchaseDate : null;
   const receiptImage = typeof body.receiptImage === "string" ? body.receiptImage.trim().slice(0, 500) : "";
   const coverImage = typeof body.coverImage === "string" ? body.coverImage.trim().slice(0, 500) : "";
@@ -118,8 +120,16 @@ export async function GET(request: Request) {
 /** 新增 / 更新设备：携带 id 时更新，否则新增 */
 export async function POST(request: Request) {
   const key = getCurrentUser();
+  let createOperationId: number | null = null;
   try {
-    const body = await request.json() as Record<string, unknown>;
+    let body: Record<string, unknown>;
+    try {
+      const parsed = await request.json();
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return Response.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
+      body = parsed as Record<string, unknown>;
+    } catch {
+      return Response.json({ error: "请求体必须是有效 JSON" }, { status: 400 });
+    }
     const next = sanitizeDevice(body);
     const db = getDb();
     const requestedId = Number(body.id);
@@ -136,12 +146,37 @@ export async function POST(request: Request) {
       await db.update(userDevices).set(update).where(and(eq(userDevices.id, requestedId), eq(userDevices.userKey, key)));
       device = { ...existing, ...update, id: requestedId };
     } else {
+      if (Object.prototype.hasOwnProperty.call(body, "idempotencyKey") || request.headers.has("idempotency-key") || request.headers.has("x-idempotency-key")) {
+        const reservation = await reserveAgentOperation({ agent: "browser", source: "browser", userKey: key }, {
+          request, body, resource: "devices", action: "create",
+        });
+        if (reservation.kind !== "reserved") {
+          if (reservation.kind === "replayed" && reservation.response.ok) {
+            const receipt = await reservation.response.clone().json() as { device?: { id?: number } };
+            const createdId = receipt.device?.id;
+            const [stillPresent] = createdId ? await db.select({ id: userDevices.id }).from(userDevices)
+              .where(and(eq(userDevices.id, createdId), eq(userDevices.userKey, key))).limit(1) : [];
+            if (!stillPresent) return Response.json({ error: "原请求创建的藏品已被删除，重试不会重新创建。", code: "operation_resource_missing", retryable: false }, {
+              status: 409, headers: { "cache-control": "no-store", "x-idempotent-replay": "true" },
+            });
+          }
+          return reservation.response;
+        }
+        createOperationId = reservation.id;
+      }
       const [created] = await db.insert(userDevices).values({ ...next, userKey: key }).returning();
-      if (!created) return Response.json({ error: "写入失败" }, { status: 500 });
+      if (!created) throw new Error("写入失败");
       device = created;
     }
-    return Response.json({ ok: true, device: presentDevice(device) }, { headers: { "cache-control": "no-store" } });
+    const payload = { ok: true, device: presentDevice(device) };
+    if (createOperationId !== null) await finishAgentOperation(createOperationId, 200, payload);
+    return Response.json(payload, { headers: { "cache-control": "no-store" } });
   } catch (error) {
+    if (createOperationId !== null) {
+      // A failed response does not prove that D1 rolled the insert back. Keep
+      // the original reservation so a retry cannot create another device.
+      return Response.json({ error: "藏品创建结果暂时无法确认，请保留原请求重试并核对藏品，不要重复新建。", code: "operation_outcome_unknown", retryable: false }, { status: 503, headers: { "cache-control": "no-store" } });
+    }
     const message = error instanceof Error ? error.message : "保存失败";
     return Response.json({ error: message }, { status: 500 });
   }

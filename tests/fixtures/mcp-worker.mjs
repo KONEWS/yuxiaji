@@ -7,6 +7,7 @@ import { uploadMusicCover } from "../../app/lib/mcp-music-cover.ts";
 import { transformCoverImage } from "../../app/lib/mcp-file-image.ts";
 import * as assets from "../../app/api/media-assets/route.ts";
 import { uploadGalleryImage } from "../../app/api/agent/gallery/upload/route.ts";
+import * as twoFactor from "../../app/api/auth/2fa/route.ts";
 
 // This entrypoint and its setup endpoints only run in a nonpersistent local
 // test Worker. They are never imported by the production Worker.
@@ -55,8 +56,15 @@ const worker = {
       return Response.json({ origin: url.origin }, { headers: { "set-cookie": cookie } });
     }
     if (url.pathname === "/__test/session") {
-      const { cookie } = await createSession(request, 1, 86400);
+      const { cookie } = await createSession(request, 1, 86400, url.searchParams.get("pending") === "1");
       return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
+    }
+    if (url.pathname === "/api/auth/2fa" && request.method === "POST") return twoFactor.POST(request);
+    if (url.pathname === "/__test/2fa-concurrent") {
+      // Start real handlers together: separate local HTTP fetches may be
+      // serialized by the test proxy and miss the challenge-consumption race.
+      const responses = await Promise.all(Array.from({ length: 3 }, () => twoFactor.POST(request.clone())));
+      return Response.json(responses.map((response) => response.status));
     }
     const oauth = await handleMcpOAuth(request);
     if (oauth) return oauth;

@@ -290,3 +290,101 @@ test("an uncertain receipt write leaves a pending reservation and cannot create 
   assert.equal(count.results[0].count, 1);
   assert.equal(operation.results[0].status_code, 102);
 });
+
+
+test("removing a gallery preserves its image when a media or device still references it", async () => {
+  const urls = ["shared_media_cover_0001", "shared_device_cover_0001", "shared_device_receipt_0001", "shared_movie_backdrop_0001"].map((version) => `/api/media-assets?v=${version}`);
+  for (const url of urls) await asset(url, true);
+  const gallery = await create({ mediaType: "visual", images: urls.map((thumbnail) => ({ thumbnail })) });
+  await create({ mediaType: "music", image: urls[0] });
+  await create({ mediaType: "movie", metadata: { backdropImage: urls[3] } });
+  const device = await api("POST", { name: "Shared artwork", coverImage: urls[1], receiptImage: urls[2] }, "/api/devices");
+  assert.equal(device.status, 200);
+  const deleted = await api("DELETE", undefined, `/api/media?id=${gallery.id}`);
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  for (const url of urls) assert.equal(await asset(url), true);
+});
+
+test("cleanup batches large asset lists and deletes only assets without current references", async () => {
+  const urls = Array.from({ length: 190 }, (_, index) => `/api/media-assets?v=cleanup_batch_image_${String(index).padStart(4, "0")}`);
+  await asset(urls[0], true);
+  await asset(urls[189], true);
+  await create({ mediaType: "music", image: urls[189] });
+  const result = await api("POST", urls, "/__test/cleanup");
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(await asset(urls[0]), false);
+  assert.equal(await asset(urls[189]), true);
+});
+
+test("nested video metadata patches are not overwritten by stored legacy aliases", async () => {
+  const video = await create({ mediaType: "video", metadata: { platform: "old", creator: "original", duration: "1:00" } });
+  const edited = await api("POST", { id: video.id, expectedRevision: video.revision, metadata: { platform: "new", creator: "updated" } });
+  assert.equal(edited.status, 200, JSON.stringify(edited.body));
+  assert.equal(edited.body.subject.metadata.platform, "new");
+  assert.equal(edited.body.subject.metadata.creator, "updated");
+  assert.equal(edited.body.subject.metadata.duration, "1:00");
+  const alias = await api("POST", { id: video.id, expectedRevision: edited.body.subject.revision, platform: "explicit alias" });
+  assert.equal(alias.status, 200);
+  assert.equal(alias.body.subject.metadata.platform, "explicit alias");
+});
+
+test("device prices distinguish missing values from an explicit zero", async () => {
+  for (const price of [null, "", "  ", undefined, 0, "0", 1.25]) {
+    const result = await api("POST", { name: "Price semantics", price }, "/api/devices");
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.device.price, price === 0 || price === "0" ? 0 : price === 1.25 ? 1.25 : null);
+  }
+  const priced = await api("POST", { name: "Clear price", price: 128 }, "/api/devices");
+  const cleared = await api("POST", { id: priced.body.device.id, name: "Clear price", price: null }, "/api/devices");
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.device.price, null);
+  for (const body of [null, [], "invalid"]) {
+    assert.equal((await api("POST", body, "/api/devices")).status, 400);
+  }
+});
+
+test("device creates replay one committed result, reject changed input, and never resurrect deleted records", async () => {
+  const body = { name: "Retry-safe device", price: 128, idempotencyKey: "browser-device-retry" };
+  const original = await api("POST", body, "/api/devices");
+  assert.equal(original.status, 200, JSON.stringify(original.body));
+  const replay = await api("POST", body, "/api/devices");
+  assert.equal(replay.status, 200);
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(replay.body, original.body);
+  const changed = await api("POST", { ...body, price: 256 }, "/api/devices");
+  assert.equal(changed.status, 409);
+  assert.equal(changed.body.code, "idempotency_conflict");
+  const [count] = await sql(["SELECT count(*) AS count FROM user_devices WHERE name='Retry-safe device'"]);
+  assert.equal(count.results[0].count, 1);
+  assert.equal((await api("DELETE", undefined, `/api/devices?id=${original.body.device.id}`)).status, 200);
+  const missing = await api("POST", body, "/api/devices");
+  assert.equal(missing.status, 409);
+  assert.equal(missing.body.code, "operation_resource_missing");
+});
+
+test("concurrent device create retries share one reservation", async () => {
+  const body = { name: "Concurrent device", idempotencyKey: "browser-device-concurrent" };
+  const results = await Promise.all(Array.from({ length: 4 }, () => api("POST", body, "/api/devices")));
+  assert.ok(results.some((result) => result.status === 200), JSON.stringify(results));
+  for (const result of results) assert.ok(result.status === 200 || result.status === 409 && result.body.code === "operation_pending", JSON.stringify(result));
+  const [count] = await sql(["SELECT count(*) AS count FROM user_devices WHERE name='Concurrent device'"]);
+  assert.equal(count.results[0].count, 1);
+  const replay = await api("POST", body, "/api/devices");
+  assert.equal(replay.status, 200);
+  assert.equal(replay.replayed, true);
+});
+
+
+test("a device receipt failure preserves the reservation instead of duplicating the committed device", async () => {
+  const body = { name: "Uncertain device receipt", idempotencyKey: "device-uncertain-receipt" };
+  await sql(["CREATE TRIGGER fail_device_receipt BEFORE UPDATE ON agent_operations WHEN NEW.agent='browser' AND NEW.idempotency_key='device-uncertain-receipt' AND NEW.status_code=200 BEGIN SELECT RAISE(ABORT,'simulated receipt failure'); END"]);
+  const failed = await api("POST", body, "/api/devices");
+  assert.equal(failed.status, 503, JSON.stringify(failed.body));
+  assert.equal(failed.body.code, "operation_outcome_unknown");
+  await sql(["DROP TRIGGER fail_device_receipt"]);
+  const retried = await api("POST", body, "/api/devices");
+  assert.equal(retried.status, 409, JSON.stringify(retried.body));
+  assert.equal(retried.body.code, "operation_pending");
+  const [count] = await sql(["SELECT count(*) AS count FROM user_devices WHERE name='Uncertain device receipt'"]);
+  assert.equal(count.results[0].count, 1);
+});

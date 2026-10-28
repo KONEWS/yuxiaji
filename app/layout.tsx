@@ -7,7 +7,7 @@ import "./music.css";
 import { YuehuaMotion } from "./components/tracker/yuehua-motion";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://tsuki-anime-rebuild.op311i5lxa.chatgpt.site"),
+  metadataBase: new URL("https://yuexia.luo66ccff.cc.cd"),
   title: "月下集",
   description: "把喜欢的作品，都收进月光里。动画、游戏、书籍、漫画与音乐的个人收藏中心。",
   openGraph: {

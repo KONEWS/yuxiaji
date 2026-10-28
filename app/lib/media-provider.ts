@@ -257,7 +257,10 @@ export async function searchMedia(query: string, type: ProviderMediaType, option
       attempts[1].status === "fulfilled" ? attempts[1].value.map((item) => aniListResult(item, "manga")) : [],
       attempts[2].status === "fulfilled" ? attempts[2].value.map(mangaDexResult) : [],
     ]);
-    if (!results.length) throw (attempts.find((attempt): attempt is PromiseRejectedResult => attempt.status === "rejected")?.reason || new Error("漫画来源均不可用"));
+    if (!results.length) {
+      const failure = attempts.find((attempt): attempt is PromiseRejectedResult => attempt.status === "rejected");
+      if (failure) throw failure.reason;
+    }
     return results;
   }
   if (type === "light_novel") {
@@ -269,7 +272,10 @@ export async function searchMedia(query: string, type: ProviderMediaType, option
       attempts[3].status === "fulfilled" ? attempts[3].value.map(bookResult) : [],
       attempts[4].status === "fulfilled" ? attempts[4].value.map(bookResult) : [],
     ]);
-    if (!results.length) throw (attempts.find((attempt): attempt is PromiseRejectedResult => attempt.status === "rejected")?.reason || new Error("书籍来源均不可用"));
+    if (!results.length) {
+      const failure = attempts.find((attempt): attempt is PromiseRejectedResult => attempt.status === "rejected");
+      if (failure) throw failure.reason;
+    }
     return results;
   }
   const subjects = await searchBangumiSubjects(query, type, options);

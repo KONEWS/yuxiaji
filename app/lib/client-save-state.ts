@@ -1,3 +1,5 @@
+import type { DevicePayload } from "./client-api";
+
 /** Build a patch without resending untouched fields from an old browser view. */
 export function changedFields<T extends object>(next: T, previous: T): Partial<T> {
   const patch: Partial<T> = {};
@@ -41,5 +43,31 @@ export class PreferenceWriter<T extends object> {
     });
     this.queue = task;
     return task;
+  }
+}
+
+/** Recover an uncertain creation before applying edits to the same device draft. */
+export class DeviceDraftWriter {
+  private creation: { key: string; payload: DevicePayload } | null = null;
+  private confirmedId: number | undefined;
+
+  async save(requested: DevicePayload, write: (payload: DevicePayload) => Promise<{ device: DevicePayload & { id: number } }>) {
+    const requireDevice = (result: { device: DevicePayload & { id: number } }) => {
+      if (!Number.isSafeInteger(result?.device?.id) || result.device.id <= 0) {
+        throw new Error("服务器未确认保存结果，草稿已保留，请核对云端藏品。");
+      }
+      return result.device;
+    };
+    const existingId = requested.id || this.confirmedId;
+    if (existingId) return requireDevice(await write({ ...requested, id: existingId }));
+    this.creation ||= { key: crypto.randomUUID(), payload: structuredClone(requested) };
+    const created = requireDevice(await write({ ...this.creation.payload, idempotencyKey: this.creation.key }));
+    this.confirmedId = created.id;
+    // The draft may have changed after an earlier response was lost. Recover the
+    // original request first; replaying its key with new fields would conflict.
+    if (Object.keys(changedFields(requested, this.creation.payload)).length) {
+      return requireDevice(await write({ ...requested, id: created.id }));
+    }
+    return created;
   }
 }

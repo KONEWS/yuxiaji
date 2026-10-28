@@ -1,6 +1,6 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "../../db";
-import { userSubjectImages, userSubjects } from "../../db/schema";
+import { userDevices, userSubjectImages, userSubjects } from "../../db/schema";
 import { deleteMediaAsset } from "./media-storage";
 import { groupGalleryImageRows, normalizeGallerySubjectIds, queryGalleryImageBatches } from "./gallery-image-batches";
 import type { MediaWriteQuery } from "./media-revisions";
@@ -119,18 +119,26 @@ export async function galleryImagesForSubject(db: Database, userKey: string, sub
 async function removeUnusedAssets(db: Database, userKey: string, candidates: string[]) {
   const urls = Array.from(new Set(candidates.filter(Boolean)));
   if (!urls.length) return;
-  const [imageRefs, subjectRefs] = await Promise.all([
-    db.select({ thumbnail: userSubjectImages.thumbnail }).from(userSubjectImages).where(and(
-      eq(userSubjectImages.userKey, userKey),
-      inArray(userSubjectImages.thumbnail, urls),
-    )),
-    db.select({ thumbnail: userSubjects.thumbnail }).from(userSubjects).where(and(
-      eq(userSubjects.userKey, userKey),
-      inArray(userSubjects.thumbnail, urls),
-    )),
-  ]);
-  const retained = new Set([...imageRefs, ...subjectRefs].map((row) => row.thumbnail));
-  await Promise.all(urls.filter((url) => !retained.has(url)).map((url) => deleteMediaAsset(url, userKey)));
+  // D1 permits at most 100 bound parameters per statement. Cleanup can span
+  // multiple galleries, so keep every reference query below that limit.
+  for (let offset = 0; offset < urls.length; offset += 90) {
+    const batch = urls.slice(offset, offset + 90);
+    const referenceColumns = [
+      [userSubjectImages, userSubjectImages.userKey, userSubjectImages.thumbnail],
+      [userSubjects, userSubjects.userKey, userSubjects.thumbnail],
+      [userSubjects, userSubjects.userKey, userSubjects.image],
+      [userSubjects, userSubjects.userKey, sql<string>`json_extract(CASE WHEN json_valid(${userSubjects.metadata}) THEN ${userSubjects.metadata} ELSE '{}' END, '$.backdropImage')`],
+      [userDevices, userDevices.userKey, userDevices.coverImage],
+      [userDevices, userDevices.userKey, userDevices.receiptImage],
+    ] as const;
+    const references = await Promise.all(referenceColumns.map(([table, owner, image]) =>
+      db.select({ url: image }).from(table).where(and(eq(owner, userKey), inArray(sql<string>`${image}`, batch))),
+    ));
+    // A gallery URL can also be used as a media/device cover. Removing the
+    // gallery must not delete an object that another current record still uses.
+    const retained = new Set(references.flat().map((row) => row.url));
+    await Promise.all(batch.filter((url) => !retained.has(url)).map((url) => deleteMediaAsset(url, userKey)));
+  }
 }
 
 export async function syncGalleryImages(db: Database, userKey: string, subjectId: number, value: unknown) {

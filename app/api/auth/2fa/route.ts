@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { adminSessions } from "../../../../db/schema";
 import { CHALLENGE_COOKIE, consumeBackupCode, createSession, csrfFailure, getPendingChallenge, loadAdminAccount, reserveTwoFactorAttempt, verifyTotp, writeAuthLog } from "../../../lib/admin-auth";
@@ -34,7 +34,14 @@ export async function POST(request: Request) {
       }
       return Response.json({ error: "验证码错误", remainingAttempts: MAX_ATTEMPTS - attempt.attempts }, { status: 401, headers: { "cache-control": "no-store" } });
     }
-    await getDb().delete(adminSessions).where(eq(adminSessions.id, pending.id));
+    // Only the request that atomically consumes this still-valid challenge may
+    // create a session; parallel valid TOTP submissions must not reuse it.
+    const [consumed] = await getDb().delete(adminSessions).where(and(
+      eq(adminSessions.id, pending.id),
+      eq(adminSessions.pending, true),
+      gt(adminSessions.expiresAt, new Date()),
+    )).returning({ id: adminSessions.id });
+    if (!consumed) return Response.json({ error: "2FA 验证已过期或已使用，请重新登录" }, { status: 401, headers: { "cache-control": "no-store" } });
     const session = await createSession(request, account.id, account.sessionDuration);
     await writeAuthLog(request, "login_success", { username: account.username, sessionId: session.session.id, metadata: { recoveryCode: validRecovery } });
     const headers = new Headers({ "set-cookie": session.cookie, "cache-control": "no-store" });

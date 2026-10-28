@@ -11,7 +11,7 @@
     "build": "node scripts/build-verified.mjs",
     "start": "vinext start",
     "check": "tsc --noEmit && npm run lint",
-    "test": "npm run build && node --test --test-concurrency=1 tests/rendered-html.test.mjs tests/media-storage-links.test.ts tests/storage-api.test.mjs tests/airing-api.test.mjs tests/mcp-connection.test.mjs tests/mcp-file-image.test.mjs tests/calendar-tracking.test.mjs tests/preferences-sync.test.mjs tests/media-progress.test.ts tests/media-conflicts.test.mjs tests/client-save-state.test.ts tests/frontend-performance.test.ts",
+    "test": "npm run build && node --test --test-concurrency=1 tests/rendered-html.test.mjs tests/media-storage-links.test.ts tests/storage-api.test.mjs tests/airing-api.test.mjs tests/mcp-connection.test.mjs tests/mcp-file-image.test.mjs tests/calendar-tracking.test.mjs tests/preferences-sync.test.mjs tests/media-progress.test.ts tests/media-conflicts.test.mjs tests/client-save-state.test.ts tests/frontend-performance.test.ts tests/login-flow.test.ts tests/provider-responses.test.mjs",
     "test:storage": "node --test tests/media-storage-links.test.ts tests/storage-api.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",

@@ -1,4 +1,6 @@
 import * as media from "../../app/api/media/route.ts";
+import * as devices from "../../app/api/devices/route.ts";
+import { cleanupDeletedGalleryAssets } from "../../app/lib/gallery-images.ts";
 import { handleAgentAsset } from "../../app/lib/agent-media-assets.ts";
 import { mediaAssetObjectKey } from "../../app/lib/media-storage.ts";
 import { and, eq } from "drizzle-orm";
@@ -20,6 +22,10 @@ const testWorker = {
       if (!key) return Response.json({ error: "Invalid test asset" }, { status: 400 });
       if (request.method === "POST") await env.BUCKET.put(key, "test image bytes");
       return Response.json({ exists: Boolean(await env.BUCKET.head(key)) });
+    }
+    if (url.pathname === "/__test/cleanup") {
+      await cleanupDeletedGalleryAssets(getDb(), env.DEFAULT_USER_ID, await request.json());
+      return Response.json({ ok: true });
     }
     if (url.pathname === "/__test/stale-snapshot") {
       const { id, imageUrl } = await request.json();
@@ -45,6 +51,7 @@ const testWorker = {
       }
     }
     if (url.pathname === "/api/agent/gallery") return handleAgentAsset(request, "visual");
+    if (url.pathname === "/api/devices") return devices[request.method]?.(request) ?? new Response("Method not allowed", { status: 405 });
     if (url.pathname === "/api/media") return media[request.method]?.(request) ?? new Response("Method not allowed", { status: 405 });
     return new Response("Not found", { status: 404 });
   },
