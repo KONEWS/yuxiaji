@@ -6,13 +6,14 @@ import wrangler from "wrangler";
 const { unstable_splitSqlQuery: splitSqlQuery, unstable_dev } = wrangler;
 
 let worker;
+let cookie;
 const lifecycle = {
   state: "verified", operationKey: "archive-839-v1", objectCount: 23,
   totalBytes: 630269, manifestSha256: "a".repeat(64), verifiedAt: 1790899200123,
 };
 async function api(path, method = "GET", body, token = "test-nova-token", key) {
   const response = await worker.fetch(path, {
-    method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) },
+    method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(cookie ? { cookie } : {}), ...(key ? { "Idempotency-Key": key } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   return { status: response.status, body: await response.json(), replay: response.headers.get("x-idempotent-replay") };
@@ -46,6 +47,19 @@ before(async () => {
     "INSERT INTO user_subjects (id,user_key,type,title,updated_at) VALUES (900,'storage-test-owner','video','video',1),(901,'other-owner','visual','private',1)",
     ...Array.from({ length: 181 }, (_, index) => `INSERT INTO user_subject_images (user_key,subject_id,thumbnail,created_at,updated_at) VALUES ('storage-test-owner',${index + 1},'/test/${index + 1}.webp',1,1)`),
   ]);
+  const setup = await worker.fetch("/__test/setup", { method: "POST" });
+  assert.equal(setup.status, 200, await setup.text());
+cookie = setup.headers.get("set-" + "cookie")?.split(";")[0];
+});
+
+test("browser storage route rejects requests without an admin session", async () => {
+  const saved = cookie;
+  cookie = undefined;
+  try {
+    assert.equal((await api("/api/media/storage?mediaId=1")).status, 401);
+  } finally {
+    cookie = saved;
+  }
 });
 after(async () => { await worker?.stop(); });
 

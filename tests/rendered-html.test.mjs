@@ -85,6 +85,21 @@ test("renders the login page in the Cloudflare Worker runtime", async () => {
   assert.match(html, /href="\/assets\/[^\"]+\.css"/i);
 });
 
+test("responses carry baseline security headers", async () => {
+  const response = await fetchLocal("/login", { headers: { accept: "text/html" } });
+  await response.text();
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.match(response.headers.get("strict-transport-security") ?? "", /max-age=31536000/);
+  assert.equal(response.headers.get("referrer-policy"), "same-origin");
+  assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/);
+  const api = await fetchLocal("/api/media");
+  await api.text();
+  assert.equal(api.status, 401);
+  assert.equal(api.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(api.headers.get("x-frame-options"), "DENY");
+});
+
 test("redirects an unauthenticated home request to login", async () => {
   const response = await fetchLocal("/", {
     headers: { accept: "text/html" },
