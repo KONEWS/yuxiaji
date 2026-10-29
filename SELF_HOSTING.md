@@ -16,22 +16,27 @@
 
 - `GET /api/state`：读取界面设置与用户偏好。
 - `POST /api/state`：保存界面设置与用户偏好；不读写媒体记录。
-- `GET /api/media`：读取当前用户的动画、电影、电视剧、游戏、书籍、漫画、音乐与画廊记录，可按个人标签筛选。
+- `GET /api/media`：读取当前用户的动画、电影、电视剧、游戏、书籍、漫画、音乐、画廊与视频记录，可按个人标签筛选。
 - `POST /api/media`：新增或更新一条媒体记录。
 - `DELETE /api/media?id=`：删除当前用户的媒体记录。
 - `GET /api/devices`：读取装备库与在役/投入统计。
 - `POST /api/devices`：新增或更新设备。
 - `DELETE /api/devices?id=`：删除设备。
-- `GET /api/search?q=&type=`：按媒体类型搜索；动画、游戏、书籍、漫画和音乐使用 Bangumi，电影与电视剧使用 TMDB。
-- `GET /api/subject?id=&type=`：读取 Bangumi 或 TMDB 媒体详情。
+- `GET /api/search?q=&type=`：按媒体类型搜索；动画、音乐使用 Bangumi，游戏使用 Bangumi 与 VNDB，漫画使用 Bangumi、AniList 与 MangaDex，书籍使用 Bangumi、AniList、NDL、Google Books 与 Open Library，电影与电视剧使用 TMDB。
+- `GET /api/subject?id=&type=`：读取外部目录媒体详情；来源同搜索分派（Bangumi、TMDB、VNDB、AniList、MangaDex 及书籍来源）。
 - `GET /api/bangumi/sync`：返回 Bangumi 同步能力与认证模式。
-- `POST /api/bangumi/sync`：按媒体类型刷新当前用户已绑定的 Bangumi 条目；默认使用公开 API，可通过 `x-bangumi-user-token` 或请求体中的 `userToken` 预留 user token。
+- `POST /api/bangumi/sync`：按媒体类型刷新当前用户已绑定的 Bangumi 条目；默认使用公开 API，可通过 `x-bangumi-user-token` 或请求体中的 `userToken` 预留 user token。同一接口另支持 `mode: "import"` 按用户名导入 Bangumi 收藏；账户绑定与收藏拉取/推送见 `/api/bangumi/account` 与 `/api/bangumi/account/sync`。
+- `GET/POST /api/avatar`：读取或上传当前用户头像。
+- `GET /api/cover?q=`：按查询代理返回封面图片。
+- `GET/POST/PATCH/DELETE /api/gallery/images`：管理画廊条目的多张图片。
+- `GET /api/anime/airing`、`POST /api/anime/airing/sync`、`POST/PATCH/DELETE /api/anime/airing/custom`：读取、同步放送日历及管理自定义放送数据。
+- `GET/POST/DELETE /api/bangumi/account`、`POST /api/bangumi/account/sync`：管理 Bangumi 账户绑定，并拉取或推送收藏。
 - `GET /api/background`：读取当前用户背景。
 - `POST /api/background`：上传当前用户背景。
 - `GET /api/media/storage?mediaId=`：读取媒体的全部存储位置。
 - `POST/PATCH/DELETE /api/media/storage`：管理媒体存储位置；可保存多个 provider、分享 URL、路径、验证状态和清单摘要。
 
-浏览器端的调用集中在 `app/lib/client-api.ts`。迁移时应保持这些接口的输入输出不变。
+浏览器端的调用集中在 `app/lib/client-api.ts`，Bangumi 账户相关调用另见 `app/components/security-panel.tsx` 与 `app/settings/bangumi/page.tsx`。本节列出迁移时必须保持契约的核心接口；完整接口以 `app/api/` 路由为准。迁移时应保持这些接口的输入输出不变。
 
 Bangumi Access Token 由管理员绑定接口接收，并使用 Worker 加密密钥加密后保存在 D1；明文不会返回浏览器或写入日志。
 
@@ -59,7 +64,7 @@ Agent 画廊上传文件上限为 20 MiB。Vinext 对 multipart API 请求也先
 ## 推荐的自有云结构
 
 1. 保持单管理员密码、TOTP 和 HttpOnly Session Cookie 认证；Agent API 继续使用隔离的 Bearer Token。
-2. 将 `user_state`、`user_subjects`、`user_devices` 和管理员相关表迁移到 PostgreSQL 或 SQLite；`user_state` 只保留界面偏好。
+2. 将 `db/schema.ts` 的全部 16 张表（媒体、画廊图片、存储关联、藏品、偏好、管理员三表、Bangumi/外部凭据、放送计划、Agent 操作审计与 MCP OAuth 四表）迁移到 PostgreSQL 或 SQLite；`user_state` 只保留界面偏好。
 3. 将背景文件迁移到 S3 兼容存储或服务器数据目录，数据库只保存版本与归属信息。
 4. 服务端继续代理 Bangumi 搜索，避免在浏览器中暴露额外配置并统一处理限流。
 5. 应用容器保持无状态，持久数据放在数据库和对象存储中，方便滚动升级与备份。
@@ -76,6 +81,12 @@ Agent 画廊上传文件上限为 20 MiB。Vinext 对 multipart API 请求也先
 - `app/api/background/route.ts`
 - `app/lib/admin-auth.ts`
 - `app/lib/agent-auth.ts`
+- `app/lib/mcp-oauth.ts`
+- `app/lib/mcp-server.ts`
+- `app/lib/mcp-content-tools.ts`
+- `app/lib/media-storage-link-store.ts`
+- `app/lib/media-storage-links.ts`
+- `app/api/media/storage/route.ts`
 - `worker/index.ts`
 
 更换这些实现并保留接口契约后，`app/page.tsx`、响应式样式和用户数据结构可以继续使用。
