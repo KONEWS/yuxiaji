@@ -27,7 +27,7 @@
 - 常规检查：`npx tsc --noEmit`、`npm run lint`。
 - 存储关联/画廊分批查询检查：`npm run test:storage`。
 - Agent 番剧排期代理检查：`node --test tests/airing-api.test.mjs`。
-- `npm test` 会先构建，再运行本地 Worker 登录页测试和存储测试；`npm run build` 使用 `scripts/build-verified.mjs`。
+- `npm test` 会先构建，再运行全部 14 个测试文件（含本地 Worker 登录页、存储、MCP/OAuth、保存冲突等）；`npm run build` 使用 `scripts/build-verified.mjs`。
 - Vinext 会先按 progressive-action 上限解析 multipart API POST。`next.config.ts` 的 21 MiB 上限为画廊 20 MiB 文件加表单开销留空间；不能直接删除此配置，否则大图会在进入上传路由前返回 413。编译后 Worker 测试覆盖此边界。
 - Schema 变化需生成并审阅新迁移。部署不会自动应用 D1 迁移；远端迁移、生产部署和 OpenClaw 主机操作按当前用户请求执行，不能把本地检查当作线上验证。
 - 用户指定的网站更新命令顺序：`npx wrangler d1 migrations apply yuexiaji-db --remote --config wrangler.jsonc`；`npx wrangler d1 execute yuexiaji-db --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" --config wrangler.jsonc`；`npx wrangler deploy --config wrangler.jsonc`。部署前完成对应构建与检查，按 schema 变化核对具体列；列出表名不能代替字段与 API 回读验证。
