@@ -55,7 +55,7 @@
 - 音乐封面下载/转换前的临时服务故障，以及画廊上传缺少 Images 服务的情况，在确定未尝试持久写入时标记可重试；调用方等待至少 5 秒后，用相同内容与原幂等键重试。重试使用同一操作记录，并通过数据库条件更新避免并发重复执行。不会在后台自动循环请求。
 - 处理中超过 10 分钟的操作返回 `operation_outcome_unknown`，要求读取目标资源核对。超时不代表未写入，不能自动重跑。已尝试 D1/R2 写入且结果不确定的错误同样不允许自动重跑。
 - `GET /api/agent/operations?idempotencyKey=...` 可只读查询调用 Agent 自己的操作状态与下一步建议；不返回原请求、文件引用或其他 Agent 的操作。ChatGPT 内容工具会返回经白名单过滤的可重试提示，未增加账户或源码权限。
-- 本次部署需要应用 `0026_agent_operation_recovery.sql`，仅新增操作摘要、可重试标记和本次开始时间，不改动已有收藏。
+- 迁移 `0026_agent_operation_recovery.sql` 为 `agent_operations` 增加操作摘要、可重试标记和开始时间，不改动已有收藏；部署流程会自动应用全部待执行迁移。
 
 ### 账户与安全
 
@@ -119,7 +119,7 @@ npx wrangler d1 migrations apply yuexiaji-db --remote --config wrangler.jsonc
 npm run db:generate
 ```
 
-迁移不会随 `wrangler deploy` 自动执行。本 README 更新本身不需要迁移。
+迁移不会随 `wrangler deploy` 自动执行。
 
 ## 检查与部署
 
@@ -129,7 +129,7 @@ npm test
 npm run deploy:built
 ```
 
-`npm test` 会先构建，再运行存储链接/画廊分批查询、存储 API、Agent 放送代理、本地 Cloudflare Worker 登录页及内容 MCP/OAuth 测试。`npm run deploy:built` 按项目要求先应用远端 D1 迁移，再查询表名、部署已验证的 Worker，最后只读验证 MCP OAuth 字段和线上协议边界。也可执行 `npm run deploy` 一次完成检查、构建、测试和生产部署。
+`npm test` 会先构建，再运行 14 个测试文件，覆盖存储链接/画廊分批查询、存储 API、Agent 放送代理、本地 Cloudflare Worker 登录页、内容 MCP/OAuth、日历追更、偏好同步、媒体进度与保存冲突等。`npm run deploy:built` 按项目要求先应用远端 D1 迁移，再查询表名、部署已验证的 Worker，最后只读验证 MCP OAuth 字段和线上协议边界。也可执行 `npm run deploy` 一次完成检查、构建、测试和生产部署。
 
 生产密钥使用 `wrangler secret put` 配置，不要写入 `wrangler.jsonc`；`dist/server/wrangler.json` 是构建中间产物，生产命令使用根配置。根配置已固定当前生产账户，避免多个 Cloudflare 账户时部署到错误目标。
 
