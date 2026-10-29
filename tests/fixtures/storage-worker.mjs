@@ -6,12 +6,18 @@ import * as media from "../../app/api/agent/media/route.ts";
 import * as devices from "../../app/api/agent/devices/route.ts";
 import * as tags from "../../app/api/agent/tags/route.ts";
 import * as browserStorage from "../../app/api/media/storage/route.ts";
+import { createSession } from "../../app/lib/admin-auth.ts";
 import { handleAgentAsset } from "../../app/lib/agent-media-assets.ts";
 
 // Only used by the isolated test Worker, never by the deployment entrypoint.
 const worker = {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
+    if (path === "/__test/setup") {
+      await env.DB.prepare("INSERT INTO admin_account (id,username,password_hash,created_at,updated_at) VALUES (1,'fixture','unused',1,1)").run();
+      const { cookie } = await createSession(request, 1, 86400);
+      return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
+    }
     if (path === "/__test/sql") {
       const statements = await request.json();
       await env.DB.batch(statements.map((statement) => env.DB.prepare(statement)));
