@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { getCurrentUser } from "../../lib/current-user";
+import { guardBrowserApi } from "../../lib/admin-auth";
 
 const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -34,6 +35,8 @@ function assetVersion(value: string | null) {
 }
 
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const email = getCurrentUser();
   const version = assetVersion(new URL(request.url).searchParams.get("v"));
   if (!version) return new Response("Not found", { status: 404 });
@@ -48,6 +51,8 @@ export async function GET(request: Request) {
 
 /** Accepts only the browser-generated thumbnail, never the original selected file. */
 export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const email = getCurrentUser();
   try {
     const form = await request.formData();

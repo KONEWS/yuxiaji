@@ -33,8 +33,37 @@ interface ExecutionContext {
 // dangerouslyAllowSVG: true in next.config.js and uncomment below:
 // const imageConfig: ImageConfig = { dangerouslyAllowSVG: true };
 
-const worker = {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+/**
+ * Baseline security headers for every response leaving this Worker,
+ * including redirects, API errors and MCP discovery. A response that already
+ * sets Content-Security-Policy (such as the MCP consent page) keeps its own,
+ * stricter policy; otherwise only framing/base/form restrictions are added so
+ * the app's existing inline styles and external cover images keep working.
+ */
+const MCP_OWNED_PATHS = (pathname: string) =>
+  pathname === "/mcp"
+  || pathname.startsWith("/.well-known/oauth")
+  || pathname.startsWith("/api/mcp/oauth/")
+  || pathname === "/connect/chatgpt"
+  || pathname.startsWith("/connect/chatgpt/");
+
+function withSecurityHeaders(response: Response, request: Request) {
+  // The MCP/OAuth branches manage their own response headers (no-store,
+  // no-referrer, and a strict CSP on their HTML pages). Rebuilding those
+  // responses here also stalls the local Worker proxy after an early MCP
+  // rejection, so return them untouched.
+  if (MCP_OWNED_PATHS(new URL(request.url).pathname)) return response;
+  const headers = new Headers(response.headers);
+  if (!headers.has("strict-transport-security")) headers.set("strict-transport-security", "max-age=31536000; includeSubDomains");
+  if (!headers.has("x-content-type-options")) headers.set("x-content-type-options", "nosniff");
+  if (!headers.has("x-frame-options")) headers.set("x-frame-options", "DENY");
+  if (!headers.has("referrer-policy")) headers.set("referrer-policy", "same-origin");
+  if (!headers.has("permissions-policy")) headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  if (!headers.has("content-security-policy")) headers.set("content-security-policy", "frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // The content connector owns its OAuth checks. Browser sessions and Agent
@@ -73,8 +102,8 @@ const worker = {
           if (url.pathname.startsWith("/api/")) return Response.json({ error: "请先修改临时密码", code: "PASSWORD_CHANGE_REQUIRED" }, { status: 403 });
           return Response.redirect(new URL("/settings/security?force=1", request.url), 302);
         }
-      } catch (error) {
-        if (url.pathname.startsWith("/api/")) return Response.json({ error: "认证服务不可用", details: error instanceof Error ? error.message : String(error) }, { status: 503 });
+      } catch {
+        if (url.pathname.startsWith("/api/")) return Response.json({ error: "认证服务不可用" }, { status: 503, headers: { "cache-control": "no-store" } });
         return Response.redirect(new URL("/login?error=unavailable", request.url), 302);
       }
     } else if (isLoginPage && request.method === "GET") {
@@ -105,6 +134,11 @@ const worker = {
     }
 
     return handler.fetch(request, env, ctx);
+}
+
+const worker = {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    return withSecurityHeaders(await handleRequest(request, env, ctx), request);
   },
 };
 

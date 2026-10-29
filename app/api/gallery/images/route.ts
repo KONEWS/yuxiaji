@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { userSubjects } from "../../../../db/schema";
 import { getCurrentUser } from "../../../lib/current-user";
+import { guardBrowserApi } from "../../../lib/admin-auth";
 import {
   appendGalleryImage,
   galleryImagesForSubject,
@@ -36,6 +37,8 @@ async function jsonBody(request: Request) {
 }
 
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const userKey = getCurrentUser();
   const db = getDb();
   const subject = await subjectFor(db, userKey, new URL(request.url).searchParams.get("subjectId"));
@@ -45,6 +48,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const userKey = getCurrentUser();
   const body = await jsonBody(request);
   if (!body) return Response.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
@@ -66,6 +71,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const userKey = getCurrentUser();
   const body = await jsonBody(request);
   if (!body) return Response.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
@@ -82,6 +89,8 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const userKey = getCurrentUser();
   const id = positiveId(new URL(request.url).searchParams.get("id"));
   if (!id) return Response.json({ error: "缺少图片 id" }, { status: 400 });

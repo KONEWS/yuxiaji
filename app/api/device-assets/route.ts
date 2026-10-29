@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { getCurrentUser } from "../../lib/current-user";
+import { guardBrowserApi } from "../../lib/admin-auth";
 
 const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const purposes = new Set(["receipt", "cover"]);
@@ -33,6 +34,8 @@ function assetVersion(value: string | null) {
 
 /** 读取设备图片（购买凭证截图 / 封面图） */
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const email = getCurrentUser();
   const url = new URL(request.url);
   const purpose = url.searchParams.get("purpose") || "receipt";
@@ -51,6 +54,8 @@ export async function GET(request: Request) {
 
 /** 上传设备图片，返回 /api/device-assets?purpose=...&v=<版本号> 地址 */
 export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const email = getCurrentUser();
   try {
     const form = await request.formData();

@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
 import { userDevices, userState, userSubjects } from "../../../db/schema";
 import { getAnimeScheduleCredential } from "../../lib/integration-credentials";
+import { guardBrowserApi } from "../../lib/admin-auth";
 
 type HealthService = {
   id: string;
@@ -26,7 +27,9 @@ function unconfigured(id: string, name: string, description: string): HealthServ
   return { id, name, description, ok: false, latency: 0, status: "未配置" };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const animeSchedule = await getAnimeScheduleCredential().catch(() => ({ token: "", source: null, row: null }));
   const googleBooksKey = ((env as typeof env & { GOOGLE_BOOKS_API_KEY?: string }).GOOGLE_BOOKS_API_KEY || "").trim();
   const services = await Promise.all([

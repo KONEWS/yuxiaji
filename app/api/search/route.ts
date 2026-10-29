@@ -1,8 +1,11 @@
 import { providerOptions, searchMedia, type ProviderMediaType } from "../../lib/media-provider";
+import { guardBrowserApi } from "../../lib/admin-auth";
 
 const SEARCH_TYPES: ProviderMediaType[] = ["anime", "game", "light_novel", "manga", "music", "movie", "tv"];
 
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const url = new URL(request.url);
   const query = url.searchParams.get("q")?.trim() || "";
   const requestedType = url.searchParams.get("type") || "anime";

@@ -1,3 +1,5 @@
+import { guardBrowserApi } from "../../lib/admin-auth";
+
 type AniListPayload = {
   data?: { Media?: { coverImage?: { extraLarge?: string; large?: string } } };
 };
@@ -33,6 +35,8 @@ async function bangumiCover(query: string) {
 }
 
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const query = new URL(request.url).searchParams.get("q")?.trim() || "";
   if (query.length < 2 || query.length > 100) return new Response("Invalid query", { status: 400 });
 
