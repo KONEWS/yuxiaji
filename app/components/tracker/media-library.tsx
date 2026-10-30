@@ -12,7 +12,7 @@ import { LazyPanel } from "./lazy-panel";
 import { CollectionPager, useCollectionPage } from "./collection-pager";
 import { TagManagerModal } from "./lazy-dialogs";
 
-function MusicCard({ item, titleMode, onDetails, onRate, selectionMode, selected, onSelect }: { item: Anime; titleMode: string; onDetails: (id: number) => void; onRate: (id: number, score: number) => void; selectionMode: boolean; selected: boolean; onSelect: (id: number) => void }) {
+function MusicCard({ item, titleMode, onDetails, onRate, selectionMode, selected, onSelect, indexNo }: { item: Anime; titleMode: string; onDetails: (id: number) => void; onRate: (id: number, score: number) => void; selectionMode: boolean; selected: boolean; onSelect: (id: number) => void; indexNo?: number }) {
   const title = titleMode === "jp" && item.jp ? item.jp : item.title;
   const cover = item.image || item.thumbnail || "";
   return <article className={`music-record ${selected ? "batch-selected" : ""}`}>
@@ -21,6 +21,7 @@ function MusicCard({ item, titleMode, onDetails, onRate, selectionMode, selected
         <CoverImage key={cover} className="music-record-image" src={cover} alt={`${title}封面`} placeholder="♫" style={coverPositionStyle(item.metadata?.coverPositionX, item.metadata?.coverPositionY, item.metadata?.coverZoom)} />
         <span className="music-record-open" aria-hidden="true">查看唱片 ↗</span>
       </button>
+      {typeof indexNo === "number" && <span className="music-record-no" aria-hidden="true">NO.{String(indexNo).padStart(3, "0")}</span>}
       {selectionMode && <label className="batch-checkbox poster-checkbox" aria-label={`选择${item.title}`}><input type="checkbox" checked={selected} onChange={() => onSelect(item.id)} /></label>}
       {item.animeSong && <span className="music-record-badge">动漫歌曲</span>}
     </div>
@@ -34,11 +35,12 @@ function MusicCard({ item, titleMode, onDetails, onRate, selectionMode, selected
   </article>;
 }
 
-function MusicListRow({ item, titleMode, onDetails, selectionMode, selected, onSelect }: { item: Anime; titleMode: string; onDetails: (id: number) => void; selectionMode: boolean; selected: boolean; onSelect: (id: number) => void }) {
+function MusicListRow({ item, titleMode, onDetails, selectionMode, selected, onSelect, indexNo }: { item: Anime; titleMode: string; onDetails: (id: number) => void; selectionMode: boolean; selected: boolean; onSelect: (id: number) => void; indexNo?: number }) {
   const displayTitle = titleMode === "jp" && item.jp ? item.jp : item.title;
   const cover = item.image || item.thumbnail || "";
   const artist = item.musicArtist || "歌手未记录";
   const album = item.musicAlbum || "单曲";
+  const credits = [item.lyricist ? `作词 ${item.lyricist}` : "", item.composer ? `作曲 ${item.composer}` : ""].filter(Boolean).join(" · ");
   return <article className={`music-list-row ${selected ? "batch-selected" : ""}`}>
     <div className="music-list-song">
       {selectionMode && <label className="batch-checkbox" aria-label={`选择${item.title}`}><input type="checkbox" checked={selected} onChange={() => onSelect(item.id)} /></label>}
@@ -46,8 +48,10 @@ function MusicListRow({ item, titleMode, onDetails, selectionMode, selected, onS
         <CoverImage key={cover} className="music-list-cover-image" src={cover} alt={`${item.title}封面`} placeholder={item.title.slice(0, 2)} style={coverPositionStyle(item.metadata?.coverPositionX, item.metadata?.coverPositionY, item.metadata?.coverZoom)} />
       </button>
       <div className="music-list-info">
+        {typeof indexNo === "number" && <span className="music-list-no" aria-hidden="true">NO.{String(indexNo).padStart(3, "0")}</span>}
         <button type="button" className="music-list-title" onClick={() => onDetails(item.id)} title={displayTitle}>{displayTitle}</button>
         <div className="music-list-artist"><span title={artist}>{artist}</span>{item.animeSong && <em>动漫歌曲</em>}</div>
+        {credits && <div className="music-list-credits" title={credits}>{credits}</div>}
         <span className="music-list-mobile-album" title={album}>{album}</span>
       </div>
     </div>
@@ -56,6 +60,48 @@ function MusicListRow({ item, titleMode, onDetails, selectionMode, selected, onS
     <span className="music-list-duration" title={item.metadata?.duration || "时长未记录"}>{item.metadata?.duration || "—"}</span>
     <button type="button" className="music-list-detail" onClick={() => onDetails(item.id)} aria-label={`查看${displayTitle}详情`}>详情</button>
   </article>;
+}
+
+type MusicGroupMode = "artist" | "album" | "year";
+
+const MUSIC_GROUP_MODES: [MusicGroupMode, string][] = [["artist", "按歌手"], ["album", "按专辑"], ["year", "按年份"]];
+
+function musicGroupLabel(item: Anime, mode: MusicGroupMode): string {
+  if (mode === "artist") return item.musicArtist || "歌手未记录";
+  if (mode === "album") return item.musicAlbum || "单曲";
+  return item.metadata?.year ? String(item.metadata.year) : "年份未记录";
+}
+
+function groupMusicBy(items: Anime[], mode: MusicGroupMode): { label: string; items: Anime[] }[] {
+  const groups = new Map<string, Anime[]>();
+  items.forEach((item) => {
+    const label = musicGroupLabel(item, mode);
+    const list = groups.get(label);
+    if (list) list.push(item);
+    else groups.set(label, [item]);
+  });
+  const entries = Array.from(groups.entries()).map(([label, list]) => ({ label, items: list }));
+  if (mode === "year") {
+    const yearOf = (label: string) => /^\d{4}$/.test(label) ? Number(label) : -1;
+    entries.sort((a, b) => yearOf(b.label) - yearOf(a.label) || b.items.length - a.items.length);
+  } else {
+    entries.sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label, "zh-CN"));
+  }
+  return entries;
+}
+
+function MusicShelves({ items, groupMode, catalogNo, titleMode, onDetails, onRate, selectionMode, selectedIds, onSelect }: { items: Anime[]; groupMode: MusicGroupMode; catalogNo: Map<number, number>; titleMode: string; onDetails: (id: number) => void; onRate: (id: number, score: number) => void; selectionMode: boolean; selectedIds: Set<number>; onSelect: (id: number) => void }) {
+  const groups = useMemo(() => groupMusicBy(items, groupMode), [items, groupMode]);
+  return <div className="music-shelves">
+    {groups.map((group) => <section key={group.label} className="music-shelf" aria-label={`${group.label} 陈列架`}>
+      <div className="music-shelf-head"><h3>{group.label}</h3><span>{group.items.length} 首</span></div>
+      <div className="music-shelf-board">
+        <div className="anime-grid music-record-grid">
+          {group.items.map((item) => <MusicCard key={item.id} item={item} titleMode={titleMode} onDetails={onDetails} onRate={onRate} selectionMode={selectionMode} selected={selectedIds.has(item.id)} onSelect={onSelect} indexNo={catalogNo.get(item.id)} />)}
+        </div>
+      </div>
+    </section>)}
+  </div>;
 }
 
 function AnimeCard({ item, onAdjust, onDetails, onRate, titleMode, layout, visualSubtypeLabels, videoSubtypeLabels, airingBySubjectId, selectionMode, selected, onSelect }: { item: Anime; onAdjust: (id: number, delta: number) => void; onDetails: (id: number) => void; onRate: (id: number, score: number) => void; titleMode: string; layout: LayoutMode; visualSubtypeLabels: VisualSubtypeLabels; videoSubtypeLabels: VideoSubtypeLabels; airingBySubjectId?: Map<number, AiringSchedule>; selectionMode: boolean; selected: boolean; onSelect: (id: number) => void }) {
@@ -141,6 +187,30 @@ export function MediaLibrary(props: MediaLibraryProps) {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [musicGroupMode, setMusicGroupMode] = useState<MusicGroupMode>(() => {
+    try {
+      const stored = typeof window !== "undefined" ? window.localStorage.getItem("yuexiaji:music-group:v1") : null;
+      return stored === "album" || stored === "year" ? stored : "artist";
+    } catch {
+      return "artist";
+    }
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem("yuexiaji:music-group:v1", musicGroupMode); } catch { /* storage unavailable */ }
+  }, [musicGroupMode]);
+  const catalogNo = useMemo(() => new Map(props.visibleAnime.map((item, index) => [item.id, index + 1])), [props.visibleAnime]);
+  const musicStats = useMemo(() => {
+    if (props.activeMedia !== "music") return null;
+    const music = props.anime.filter((item) => normalizeMediaType(item.mediaType) === "music");
+    const artists = new Set(music.map((item) => item.musicArtist || "").filter(Boolean));
+    const scored = music.filter((item) => (item.score || 0) > 0);
+    return {
+      total: music.length,
+      artists: artists.size,
+      animeSongs: music.filter((item) => item.animeSong).length,
+      average: scored.length ? scored.reduce((sum, item) => sum + (item.score || 0), 0) / scored.length : null,
+    };
+  }, [props.activeMedia, props.anime]);
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 681px)");
     const update = () => setCanDragMedia(mediaQuery.matches);
@@ -230,6 +300,7 @@ export function MediaLibrary(props: MediaLibraryProps) {
   const layout = props.activeMedia === "music" ? props.musicLayout : props.acgLayout;
   const setLayout = props.activeMedia === "music" ? props.setMusicLayout : props.setAcgLayout;
   const musicList = props.activeMedia === "music" && layout === "list";
+  const musicShelf = props.activeMedia === "music" && layout === "grid";
   return <><section className={`content-grid ${props.activeMedia === "music" ? "music-library" : ""}`}><div className="library-panel"><div className="section-title"><div><h2>{activeMediaLabel}</h2><p>{props.activeMedia === "music" ? `${props.visibleAnime.length} 首音乐 · ${props.musicFacets.albums.length} 张专辑 · ${props.musicFacets.artists.length} 位歌手` : `${props.visibleAnime.length} 个条目 · ${mediaScopeLabel}`}</p></div><div className="section-title-actions"><div className="view-toggle" role="group" aria-label="收藏库显示方式"><button type="button" className={layout === "grid" ? "active" : ""} onClick={() => setLayout("grid")} aria-label="网格显示" aria-pressed={layout === "grid"} title="网格显示">▦</button><button type="button" className={layout === "list" ? "active" : ""} onClick={() => setLayout("list")} aria-label="列表显示" aria-pressed={layout === "list"}>☷</button></div><button className="mobile-add" onClick={props.openAdd}>＋</button></div></div>
     <div className="library-nav-row">
       <nav className="status-tabs unified-library-tabs" aria-label="收藏状态与独立媒体">{primaryStatusMeta.map(([id, label]) => <button key={id} className={props.activeStatus === id && (props.activeMedia === "all" || isCollectionMediaType(props.activeMedia)) ? "active" : ""} onClick={() => selectStatus(id)} aria-pressed={props.activeStatus === id && (props.activeMedia === "all" || isCollectionMediaType(props.activeMedia))}>{label}<span>{props.statusCounts[id]}</span></button>)}<i className="library-mode-divider" aria-hidden="true" />{orderedMediaMeta.filter(([id]) => ["music", "visual", "video"].includes(id)).map(([id, label, icon]) => <button key={id} className={`media-mode-button ${props.activeMedia === id ? "active" : ""}`} onClick={() => selectMedia(id as MediaType)} title={label}><i>{icon}</i>{label}</button>)}</nav>
@@ -240,17 +311,30 @@ export function MediaLibrary(props: MediaLibraryProps) {
     <section className="tag-library" aria-label="标签"><div className="tag-library-title"><i>◇</i><h3>标签</h3><span>{tagCounts.length} 个{props.activeTags.length ? ` · 已选 ${props.activeTags.length}` : ""}</span><button className="tag-manage-trigger" onClick={() => setTagManagerOpen(true)}>管理</button></div><div className="tag-library-chips"><button className={props.activeTags.length === 0 ? "active" : ""} onClick={() => props.setActiveTags([])} aria-pressed={props.activeTags.length === 0}>全部</button>{shownTagCounts.map(({ label, count, pinned }) => <button key={label} className={props.activeTags.includes(label) ? "active" : ""} onClick={() => toggleTag(label)} aria-pressed={props.activeTags.includes(label)}>{pinned && <b>★</b>}#{label} <span>({count})</span></button>)}</div></section>
     <div className="sort-filter-bar"><div><RoundedSelect value={props.ratingScope} onChange={props.setRatingScope} options={[{ value: "personal", label: "个人评分" }, { value: "global", label: "Bangumi 评分" }, { value: "all", label: "两者较高" }]} ariaLabel="评分类型" /><RoundedSelect value={props.scoreFloor} onChange={props.setScoreFloor} options={[{ value: 0, label: "不限分数" }, { value: 6, label: "6 分以上" }, { value: 7, label: "7 分以上" }, { value: 8, label: "8 分以上" }, { value: 9, label: "9 分以上" }]} ariaLabel="最低评分" />{props.activeStatus === "all" && (props.activeMedia === "all" || isCollectionMediaType(props.activeMedia)) && <label className={props.hideDropped ? "active" : ""}><input type="checkbox" checked={props.hideDropped} onChange={(event) => props.setHideDropped(event.target.checked)} />隐藏抛弃</label>}</div><div className="sort-filter-actions">{selectionMode && <><button type="button" className="batch-select-trigger" onClick={toggleSelectAll} disabled={!props.visibleAnime.length}>{allVisibleSelected ? "取消全选" : "全选筛选结果"}</button><button type="button" className="batch-delete-button" onClick={() => void deleteSelected()} disabled={!selectedVisibleIds.length}>删除已选{selectedVisibleIds.length ? ` ${selectedVisibleIds.length}` : ""}</button></>}<button type="button" className={`batch-select-trigger ${selectionMode ? "active" : ""}`} onClick={toggleSelectionMode} aria-pressed={selectionMode}>{selectionMode ? "取消选择" : "批量选择"}</button><RoundedSelect className="sort-select" value={props.sortMode} onChange={props.setSortMode} options={[{ value: "updated", label: "最近记录" }, { value: "personal", label: "个人评分从高到低" }, { value: "global", label: "Bangumi 评分从高到低" }, { value: "progress", label: "进度从高到低" }, { value: "title", label: "标题排序" }]} ariaLabel="排序方式" /></div></div>
     {props.activeMedia === "music" && <div className="music-filter-bar"><RoundedSelect value={props.musicAlbum} onChange={props.setMusicAlbum} options={[{ value: "all", label: "全部专辑" }, ...props.musicFacets.albums.map((album) => ({ value: album, label: album }))]} ariaLabel="按专辑筛选" /><RoundedSelect value={props.musicArtist} onChange={props.setMusicArtist} options={[{ value: "all", label: "全部歌手" }, ...props.musicFacets.artists.map((artist) => ({ value: artist, label: artist }))]} ariaLabel="按歌手筛选" /><RoundedSelect value={props.musicLyricist} onChange={props.setMusicLyricist} options={[{ value: "all", label: "全部作词" }, ...props.musicFacets.lyricists.map((lyricist) => ({ value: lyricist, label: lyricist }))]} ariaLabel="按作词筛选" /><label className={props.animeSongsOnly ? "active" : ""}><input type="checkbox" checked={props.animeSongsOnly} onChange={(event) => props.setAnimeSongsOnly(event.target.checked)} />动漫歌曲</label></div>}
+    {props.activeMedia === "music" && musicStats && <div className="music-showcase-bar">
+      <dl className="music-stats" aria-label="音乐收藏统计">
+        <div><dt>歌曲</dt><dd>{musicStats.total}<small> 首</small></dd></div>
+        <div><dt>歌手</dt><dd>{musicStats.artists}<small> 位</small></dd></div>
+        <div><dt>动漫歌曲</dt><dd>{musicStats.animeSongs}<small> 首</small></dd></div>
+        <div><dt>平均分</dt><dd>{musicStats.average !== null ? musicStats.average.toFixed(1) : "—"}</dd></div>
+      </dl>
+      {musicShelf && <div className="music-group-control"><span className="music-group-label">陈列分组</span><div className="music-group-tabs yuehua-segments" role="group" aria-label="音乐陈列分组">{MUSIC_GROUP_MODES.map(([mode, label]) => <button key={mode} type="button" className={musicGroupMode === mode ? "active" : ""} aria-pressed={musicGroupMode === mode} onClick={() => setMusicGroupMode(mode)}>{label}</button>)}</div></div>}
+    </div>}
     {props.activeMedia === "visual" && <div className="music-filter-bar"><RoundedSelect value={props.visualSubtype} onChange={props.setVisualSubtype} options={[{ value: "all", label: "全部" }, ...Object.entries(props.visualSubtypeLabels).map(([id, label]) => ({ value: id, label }))]} ariaLabel="按画廊子类型筛选" /><button type="button" className="inline-manage-button" onClick={() => props.openVisualSubtypeManager("library")}>管理子类型</button></div>}
     {props.activeMedia === "video" && <div className="music-filter-bar"><RoundedSelect value={props.videoSubtype} onChange={props.setVideoSubtype} options={[{ value: "all", label: "全部" }, ...Object.entries(props.videoSubtypeLabels).map(([id, label]) => ({ value: id, label }))]} ariaLabel="按视频子分类筛选" /><button type="button" className="inline-manage-button" onClick={() => props.openVideoSubtypeManager("library")}>管理子类型</button></div>}
     <div ref={pageAnchor} tabIndex={-1} className="collection-page-anchor" />
-    <CollectionPager range={pageRange} total={pageTotal} go={goPage} />
-    <div className={`anime-grid ${layout === "list" ? "anime-grid-list" : ""} ${musicList ? "music-track-list" : props.activeMedia === "music" ? "music-record-grid" : ""}`}>
+    {!musicShelf && <CollectionPager range={pageRange} total={pageTotal} go={goPage} />}
+    {musicShelf && (props.visibleAnime.length
+      ? <MusicShelves items={props.visibleAnime} groupMode={musicGroupMode} catalogNo={catalogNo} titleMode={props.titleMode} onDetails={props.onDetails} onRate={props.onRate} selectionMode={selectionMode} selectedIds={selectedIds} onSelect={toggleSelection} />
+      : <div className="empty-state"><b>这里暂时没有收藏</b><p>可以调整筛选条件，或者添加一个新条目。</p><button onClick={props.openAdd}>添加收藏</button></div>)}
+    {!musicShelf && <div className={`anime-grid ${layout === "list" ? "anime-grid-list" : ""} ${musicList ? "music-track-list" : props.activeMedia === "music" ? "music-record-grid" : ""}`}>
       {layout === "list" && (musicList ? <div className="music-list-header"><span>歌曲</span><span>专辑</span><span>评分</span><span>时长</span><span>操作</span></div> : <div className="anime-list-header"><span>分类</span><span>作品名</span><span>评分</span><span>进度</span><span>操作</span></div>)}
       {pageItems.map((item) => musicList
-        ? <MusicListRow key={item.id} item={item} titleMode={props.titleMode} onDetails={props.onDetails} selectionMode={selectionMode} selected={selectedIds.has(item.id)} onSelect={toggleSelection} />
+        ? <MusicListRow key={item.id} item={item} titleMode={props.titleMode} onDetails={props.onDetails} selectionMode={selectionMode} selected={selectedIds.has(item.id)} onSelect={toggleSelection} indexNo={catalogNo.get(item.id)} />
         : normalizeMediaType(item.mediaType) === "music" && layout === "grid"
         ? <MusicCard key={item.id} item={item} titleMode={props.titleMode} onDetails={props.onDetails} onRate={props.onRate} selectionMode={selectionMode} selected={selectedIds.has(item.id)} onSelect={toggleSelection} />
         : <AnimeCard key={item.id} item={item} layout={layout} onAdjust={props.onAdjust} onDetails={props.onDetails} onRate={props.onRate} titleMode={props.titleMode} visualSubtypeLabels={props.visualSubtypeLabels} videoSubtypeLabels={props.videoSubtypeLabels} airingBySubjectId={props.airingBySubjectId} selectionMode={selectionMode} selected={selectedIds.has(item.id)} onSelect={toggleSelection} />)}
       {!props.visibleAnime.length && <div className="empty-state"><b>这里暂时没有收藏</b><p>可以调整筛选条件，或者添加一个新条目。</p><button onClick={props.openAdd}>添加收藏</button></div>}
-    </div><CollectionPager range={pageRange} total={pageTotal} go={goPage} /></div>{props.activeMedia !== "music" && <WeeklyCalendar open={props.openCalendar} toggle={props.toggleCalendarTracking} titleMode={props.titleMode} airingSchedules={props.airingSchedules} anime={props.anime} />}</section>{tagManagerOpen && <LazyPanel close={() => setTagManagerOpen(false)}><TagManagerModal entries={tagCounts} activeTags={props.activeTags} setActiveTags={props.setActiveTags} close={() => setTagManagerOpen(false)} setPreferences={props.setTagPreferences} /></LazyPanel>}</>;
+    </div>}
+    {!musicShelf && <CollectionPager range={pageRange} total={pageTotal} go={goPage} />}</div>{props.activeMedia !== "music" && <WeeklyCalendar open={props.openCalendar} toggle={props.toggleCalendarTracking} titleMode={props.titleMode} airingSchedules={props.airingSchedules} anime={props.anime} />}</section>{tagManagerOpen && <LazyPanel close={() => setTagManagerOpen(false)}><TagManagerModal entries={tagCounts} activeTags={props.activeTags} setActiveTags={props.setActiveTags} close={() => setTagManagerOpen(false)} setPreferences={props.setTagPreferences} /></LazyPanel>}</>;
 }
