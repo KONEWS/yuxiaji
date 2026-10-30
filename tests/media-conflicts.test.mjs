@@ -6,10 +6,11 @@ import wrangler from "wrangler";
 const { unstable_splitSqlQuery: splitSqlQuery, unstable_dev } = wrangler;
 const owner = "media-conflicts-owner";
 let worker;
+let cookie;
 
 async function api(method = "GET", body, path = "/api/media", headers = {}) {
   const response = await worker.fetch(path, {
-    method, headers: { "content-type": "application/json", ...headers },
+    method, headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}), ...headers },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   return { status: response.status, body: await response.json(), replayed: response.headers.get("x-idempotent-replay") === "true" };
@@ -55,6 +56,47 @@ before(async () => {
   });
   const migrations = (await readdir("drizzle")).filter((name) => name.endsWith(".sql")).sort();
   for (const name of migrations) await sql(splitSqlQuery(await readFile(`drizzle/${name}`, "utf8")));
+  const setup = await worker.fetch("/__test/setup", { method: "POST" });
+  assert.equal(setup.status, 200, await setup.text());
+cookie = setup.headers.get("set-" + "cookie")?.split(";")[0];
+});
+
+test("browser media and device routes reject requests without an admin session", async () => {
+  const saved = cookie;
+  cookie = undefined;
+  try {
+    assert.equal((await api("GET")).status, 401);
+    assert.equal((await api("POST", { name: "No session" }, "/api/devices")).status, 401);
+  } finally {
+    cookie = saved;
+  }
+  const csrf = await worker.fetch("/api/media", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie, origin: "https://evil.invalid" },
+    body: JSON.stringify({ title: "Cross site" }),
+  });
+  assert.equal(csrf.status, 403);
+});
+
+async function avatarUpload(bytes, type, withCookie = true) {
+  const form = new FormData();
+  form.set("avatar", new Blob([bytes], { type }), "avatar.png");
+  const request = new Request("http://localhost/api/avatar", { method: "POST", body: form });
+  return worker.fetch("/api/avatar", {
+    method: "POST",
+    headers: { "content-type": request.headers.get("content-type"), ...(withCookie && cookie ? { cookie } : {}) },
+    body: await request.arrayBuffer(),
+  });
+}
+
+test("avatar uploads verify image magic bytes, not only the declared type", async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const accepted = await avatarUpload(png, "image/png");
+  assert.equal(accepted.status, 200, await accepted.text());
+  const rejected = await avatarUpload(new TextEncoder().encode("<html>not an image</html>"), "image/png");
+  assert.equal(rejected.status, 415);
+  const anonymous = await avatarUpload(png, "image/png", false);
+  assert.equal(anonymous.status, 401);
 });
 
 after(async () => { await worker?.stop(); });

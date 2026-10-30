@@ -1,9 +1,12 @@
 import { getMediaDetail, providerOptions, resolveMediaId, type ProviderMediaType, type ProviderLookup } from "../../lib/media-provider";
+import { guardBrowserApi } from "../../lib/admin-auth";
 import { normalizeVndbId, vndbNumericId } from "../../lib/vndb-api";
 
 const DETAIL_TYPES: ProviderMediaType[] = ["anime", "game", "light_novel", "manga", "music", "movie", "tv"];
 
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const url = new URL(request.url);
   const parsedId = Number(url.searchParams.get("id"));
   const requestedId = Number.isSafeInteger(parsedId) && parsedId > 0 ? parsedId : 0;

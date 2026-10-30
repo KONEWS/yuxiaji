@@ -8,6 +8,7 @@ import { appendGalleryImage, presentGalleryImage, presentLegacyGalleryImage, del
 import { mediaStorageLinksByMediaIds } from "../../lib/media-storage-link-store";
 import { MediaConflictError, mediaRevision, mediaSnapshotSelection, snapshotGalleryImages, writeMediaSnapshot, type MediaWriteQuery } from "../../lib/media-revisions";
 import { finishAgentOperation, reserveAgentOperation } from "../../lib/agent-operations";
+import { guardBrowserApi } from "../../lib/admin-auth";
 
 const MEDIA_TYPES = ["anime", "movie", "tv", "game", "light_novel", "manga", "music", "visual", "video"] as const;
 const STATUSES = ["watching", "wish", "finished", "library", "dropped"] as const;
@@ -193,6 +194,8 @@ async function presentBrowserSubject(row: typeof userSubjects.$inferSelect & { s
 }
 
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   const url = new URL(request.url);
   const id = url.searchParams.get("id");
@@ -223,6 +226,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   let createOperationId: number | null = null;
   try {
@@ -330,6 +335,8 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   const id = Number(new URL(request.url).searchParams.get("id"));
   if (!Number.isInteger(id) || id <= 0) return Response.json({ error: "缺少媒体记录 id" }, { status: 400 });

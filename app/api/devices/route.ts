@@ -3,6 +3,7 @@ import { getDb } from "../../../db";
 import { userDevices } from "../../../db/schema";
 import { getCurrentUser } from "../../lib/current-user";
 import { finishAgentOperation, reserveAgentOperation } from "../../lib/agent-operations";
+import { guardBrowserApi } from "../../lib/admin-auth";
 
 const DEVICE_STATUSES = ["active", "backup", "retired"];
 const CURRENCIES = ["CNY"];
@@ -87,6 +88,8 @@ export function presentDevice(row: typeof userDevices.$inferSelect) {
 
 /** 设备列表 + 在役总数 + 总投入金额统计 */
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   const url = new URL(request.url);
   const category = url.searchParams.get("category");
@@ -119,6 +122,8 @@ export async function GET(request: Request) {
 
 /** 新增 / 更新设备：携带 id 时更新，否则新增 */
 export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   let createOperationId: number | null = null;
   try {
@@ -184,6 +189,8 @@ export async function POST(request: Request) {
 
 /** 删除设备（仅限本人名下） */
 export async function DELETE(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   try {
     const url = new URL(request.url);

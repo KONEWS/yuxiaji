@@ -155,7 +155,7 @@ test("music cover upload stores a display image, preserves song fields, reads ba
   assert.equal(result.media.metadata.duration, "03:42");
   assert.equal(result.media.metadata.overview, "Keep overview");
   assert.equal(result.media.metadata.coverZoom, 100);
-  const image = await fetchLocal(result.media.image);
+  const image = await fetchLocal(result.media.image, { headers: { cookie: adminCookie } });
   assert.equal(image.status, 200);
   assert.equal(image.headers.get("content-type"), "image/webp");
   assert.equal((await image.arrayBuffer()).byteLength, 16);
@@ -254,8 +254,8 @@ test("Nova, Hikari, Codex and ChatGPT share exact-file warnings while separate r
   // Deleting the original gallery must not remove another record's cover.
   const deleted = await fetchLocal(`/api/agent/media?id=${gallery.id}`, { method: "DELETE", headers: { authorization: "Bearer test-nova-token", "idempotency-key": "delete-duplicate-gallery" } });
   assert.equal(deleted.status, 200);
-  assert.equal((await fetchLocal(cover.media.image)).status, 200);
-  assert.equal((await fetchLocal(other.body.thumbnailUrl)).status, 200);
+  assert.equal((await fetchLocal(cover.media.image, { headers: { cookie: adminCookie } })).status, 200);
+  assert.equal((await fetchLocal(other.body.thumbnailUrl, { headers: { cookie: adminCookie } })).status, 200);
 });
 
 test("standalone uploads warn across agents, ignore deleted objects and do not match filenames alone", async () => {
@@ -297,14 +297,14 @@ test("a missing gallery object is repaired instead of returning a duplicate with
   const bytes = new Uint8Array([...webpBytes, 7]);
   const first = await galleryUpload(bytes, "missing-gallery-first", gallery.id);
   await jsonRequest("/__test/delete-asset", { key: first.body.objectKey });
-  assert.equal((await fetchLocal(first.body.thumbnailUrl)).status, 404);
+  assert.equal((await fetchLocal(first.body.thumbnailUrl, { headers: { cookie: adminCookie } })).status, 404);
   const repaired = await galleryUpload(bytes, "missing-gallery-repair", gallery.id);
   assert.equal(repaired.body.duplicate, true);
   assert.equal(repaired.body.skipped, false);
   assert.equal(repaired.body.restored, true);
   assert.equal(repaired.body.thumbnailUrl, first.body.thumbnailUrl);
   assert.equal(repaired.body.images.length, 1);
-  assert.equal((await fetchLocal(first.body.thumbnailUrl)).status, 200);
+  assert.equal((await fetchLocal(first.body.thumbnailUrl, { headers: { cookie: adminCookie } })).status, 200);
 });
 
 test("old music upload receipts cannot cause a replacement cover to be skipped", async () => {

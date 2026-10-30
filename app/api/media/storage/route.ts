@@ -1,5 +1,6 @@
 import { getDb } from "../../../../db";
 import { getCurrentUser } from "../../../lib/current-user";
+import { guardBrowserApi } from "../../../lib/admin-auth";
 import {
   createMediaStorageLink,
   deleteMediaStorageLink,
@@ -39,6 +40,8 @@ function linkIdFrom(request: Request, body?: Record<string, unknown>) {
 }
 
 export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const mediaId = mediaIdFrom(request);
   if (!mediaId) return Response.json({ error: "缺少正整数 mediaId" }, { status: 400 });
   try {
@@ -50,6 +53,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const body = await jsonBody(request);
   if (!body) return Response.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
   const mediaId = mediaIdFrom(request, body);
@@ -64,6 +69,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const body = await jsonBody(request);
   if (!body) return Response.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
   const mediaId = mediaIdFrom(request, body);
@@ -79,6 +86,8 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const mediaId = mediaIdFrom(request);
   const id = linkIdFrom(request);
   if (!mediaId || !id) return Response.json({ error: "DELETE 需要正整数 mediaId 和 id" }, { status: 400 });

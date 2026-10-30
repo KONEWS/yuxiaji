@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { userState } from "../../../db/schema";
 import { getCurrentUser } from "../../lib/current-user";
+import { guardBrowserApi } from "../../lib/admin-auth";
 import { normalizeSyncSettings, normalizeVideoSubtypeLabels, normalizeVisualSubtypeLabels } from "../../lib/constants";
 
 function parseArray(value: string, fallback: unknown[] = []) {
@@ -22,7 +23,9 @@ function parseObject(value: string) {
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   try {
     const db = getDb();
@@ -54,6 +57,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
   const key = getCurrentUser();
   try {
     let parsed: unknown;

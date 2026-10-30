@@ -1,5 +1,7 @@
 import * as media from "../../app/api/media/route.ts";
 import * as devices from "../../app/api/devices/route.ts";
+import * as avatar from "../../app/api/avatar/route.ts";
+import { createSession } from "../../app/lib/admin-auth.ts";
 import { cleanupDeletedGalleryAssets } from "../../app/lib/gallery-images.ts";
 import { handleAgentAsset } from "../../app/lib/agent-media-assets.ts";
 import { mediaAssetObjectKey } from "../../app/lib/media-storage.ts";
@@ -12,6 +14,11 @@ import { MediaConflictError, mediaSnapshotSelection, writeMediaSnapshot } from "
 const testWorker = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/__test/setup") {
+      await env.DB.prepare("INSERT INTO admin_account (id,username,password_hash,created_at,updated_at) VALUES (1,'fixture','unused',1,1)").run();
+      const { cookie } = await createSession(request, 1, 86400);
+      return Response.json({ ok: true }, { headers: { "set-cookie": cookie } });
+    }
     if (url.pathname === "/__test/sql") {
       const statements = await request.json();
       const results = await env.DB.batch(statements.map((statement) => env.DB.prepare(statement)));
@@ -52,6 +59,7 @@ const testWorker = {
     }
     if (url.pathname === "/api/agent/gallery") return handleAgentAsset(request, "visual");
     if (url.pathname === "/api/devices") return devices[request.method]?.(request) ?? new Response("Method not allowed", { status: 405 });
+    if (url.pathname === "/api/avatar") return avatar[request.method]?.(request) ?? new Response("Method not allowed", { status: 405 });
     if (url.pathname === "/api/media") return media[request.method]?.(request) ?? new Response("Method not allowed", { status: 405 });
     return new Response("Not found", { status: 404 });
   },

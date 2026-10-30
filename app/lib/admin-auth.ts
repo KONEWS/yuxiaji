@@ -47,6 +47,18 @@ export async function hashPassword(password: string) {
   return `pbkdf2-sha256$${PASSWORD_ITERATIONS}$${bytesToBase64Url(salt)}$${hash}`;
 }
 
+/** Constant-time text comparison; length difference is folded into the result. */
+function timingSafeEqualText(a: string, b: string) {
+  const left = new TextEncoder().encode(a);
+  const right = new TextEncoder().encode(b);
+  let diff = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    diff |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  }
+  return diff === 0;
+}
+
 export async function verifyPassword(password: string, encoded: string) {
   const [algorithm, iterationText, saltText, expected] = encoded.split("$");
   if (algorithm !== "pbkdf2-sha256" || !iterationText || !saltText || !expected) return false;
@@ -54,7 +66,7 @@ export async function verifyPassword(password: string, encoded: string) {
   if (!Number.isSafeInteger(iterations) || iterations < 100_000 || iterations > 1_000_000) return false;
   try {
     const actual = await derivePassword(password, base64UrlToBytes(saltText), iterations);
-    return actual === expected;
+    return timingSafeEqualText(actual, expected);
   } catch {
     return false;
   }
@@ -122,7 +134,7 @@ export async function verifyTotp(secret: string, code: string, now = Date.now())
   if (!/^\d{6}$/.test(code.trim()) || !secret) return false;
   const counter = Math.floor(now / 30_000);
   for (const offset of [-1, 0, 1]) {
-    if ((await hotp(secret, counter + offset)) === code.trim()) return true;
+    if (timingSafeEqualText(await hotp(secret, counter + offset), code.trim())) return true;
   }
   return false;
 }
@@ -290,9 +302,26 @@ export async function requireAdminSession(request: Request) {
   try {
     const result = await getAdminSession(request);
     return result || Response.json({ error: "需要管理员登录" }, { status: 401, headers: { "cache-control": "no-store" } });
-  } catch (error) {
-    return Response.json({ error: "认证服务不可用", details: error instanceof Error ? error.message : String(error) }, { status: 503 });
+  } catch {
+    // Never expose internal error details to unauthenticated callers.
+    return Response.json({ error: "认证服务不可用" }, { status: 503, headers: { "cache-control": "no-store" } });
   }
+}
+
+/**
+ * Second line of defence for browser API routes. The Worker entry already
+ * enforces the same Session + CSRF checks globally; repeating them in the
+ * route means a future Worker exemption change cannot silently expose these
+ * handlers. Returns a failure Response, or null when the request may proceed.
+ * Agent and MCP routes must not use this: they authenticate separately.
+ */
+export async function guardBrowserApi(request: Request) {
+  if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    const csrf = csrfFailure(request);
+    if (csrf) return csrf;
+  }
+  const current = await requireAdminSession(request);
+  return current instanceof Response ? current : null;
 }
 
 export function csrfFailure(request: Request) {
