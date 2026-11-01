@@ -26,6 +26,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, username, temporaryPassword, warning: "临时密码只显示这一次，请立即登录并修改密码" }, { status: 201, headers: { "cache-control": "no-store" } });
   } catch (error) {
     if (String(error).toLowerCase().includes("unique")) return Response.json({ error: "管理员已经初始化" }, { status: 409 });
-    return Response.json({ error: "初始化失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "初始化失败" }, { status: 500 });
   }
 }

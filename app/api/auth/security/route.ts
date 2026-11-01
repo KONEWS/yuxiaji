@@ -147,7 +147,8 @@ export async function POST(request: Request) {
     }
     return Response.json({ error: "未知安全操作" }, { status: 400 });
   } catch (error) {
-    return Response.json({ error: "安全设置操作失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "安全设置操作失败" }, { status: 500 });
   }
 }
 
