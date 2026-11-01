@@ -1,0 +1,6 @@
+# The single entry below is the RFC 6238 TOTP test vector committed in
+# tests/mcp-connection.test.mjs (commit d8070da). It is the Base32 form of the
+# public test string "12345678901234567890" and is only ever written to a
+# throwaway local test database. Verified by the full-history secret audit on
+# 2026-11-01; every other finding must fail CI.
+d8070da7179660f55328f28f0fdf4e6ca8e44fc1:tests/mcp-connection.test.mjs:generic-api-key:368
