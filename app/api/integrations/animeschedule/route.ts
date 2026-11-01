@@ -30,7 +30,8 @@ export async function GET(request: Request) {
   try {
     return Response.json(publicStatus(await getAnimeScheduleCredential()), { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "读取 AnimeSchedule 配置失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "读取 AnimeSchedule 配置失败" }, { status: 500 });
   }
 }
 
@@ -54,7 +55,8 @@ export async function POST(request: Request) {
     }
     return Response.json({ ok: true, configured: true, source: "settings", lastVerifiedAt: now.toISOString(), updatedAt: now.toISOString() }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "AnimeSchedule 绑定失败", details: error instanceof Error ? error.message : String(error) }, { status: 502 });
+    console.error(error);
+    return Response.json({ error: "AnimeSchedule 绑定失败" }, { status: 502 });
   }
 }
 
@@ -67,6 +69,7 @@ export async function DELETE(request: Request) {
     await getDb().delete(externalServiceCredentials).where(and(eq(externalServiceCredentials.provider, ANIMESCHEDULE_PROVIDER), eq(externalServiceCredentials.adminId, current.account.id)));
     return Response.json({ ok: true, configured: hasEnvironmentAnimeScheduleToken(), source: hasEnvironmentAnimeScheduleToken() ? "environment" : null });
   } catch (error) {
-    return Response.json({ error: "AnimeSchedule 解绑失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "AnimeSchedule 解绑失败" }, { status: 500 });
   }
 }
