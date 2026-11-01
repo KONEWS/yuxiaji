@@ -178,6 +178,7 @@ export async function POST(request: Request) {
     await getDb().update(bangumiAccount).set({ lastSyncAt, updatedAt: lastSyncAt }).where(eq(bangumiAccount.adminId, current.account.id));
     return Response.json({ ok: true, provider: "bangumi", direction: "pull", requested: imported.length + errors.length, fetched: collections.length, synced: imported.length, failed: errors.length, skipped: collections.length - imported.length - errors.length, updates: imported, errors, lastSyncAt: lastSyncAt.toISOString() }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "Bangumi 收藏同步失败", details: error instanceof Error ? error.message : String(error) }, { status: 502 });
+    console.error(error);
+    return Response.json({ error: "Bangumi 收藏同步失败" }, { status: 502 });
   }
 }

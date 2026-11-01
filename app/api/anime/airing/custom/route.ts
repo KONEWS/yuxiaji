@@ -66,7 +66,8 @@ export async function POST(request: Request) {
     const [created] = await db.insert(animeAiringSchedule).values({ ...data, createdAt: now }).returning({ id: animeAiringSchedule.id });
     return Response.json({ ok: true, id: created?.id, created: true }, { status: 201, headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "保存自定义放送失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "保存自定义放送失败" }, { status: 500 });
   }
 }
 
@@ -86,6 +87,7 @@ export async function DELETE(request: Request) {
     if (!deleted.length) return Response.json({ error: "自定义放送不存在" }, { status: 404 });
     return Response.json({ ok: true, id }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "删除自定义放送失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "删除自定义放送失败" }, { status: 500 });
   }
 }

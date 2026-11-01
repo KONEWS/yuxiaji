@@ -26,6 +26,7 @@ export async function POST(request: Request) {
     await writeAuthLog(request, "login_success", { username: account.username, sessionId: session.session.id });
     return Response.json({ ok: true, account: publicAccount(account) }, { headers: new Headers({ "set-cookie": session.cookie, "cache-control": "no-store" }) });
   } catch (error) {
-    return Response.json({ error: "登录失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "登录失败" }, { status: 500 });
   }
 }

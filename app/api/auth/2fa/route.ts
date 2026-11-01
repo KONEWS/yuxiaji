@@ -48,6 +48,7 @@ export async function POST(request: Request) {
     headers.append("set-cookie", `${CHALLENGE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`);
     return Response.json({ ok: true }, { headers });
   } catch (error) {
-    return Response.json({ error: "2FA 验证失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "2FA 验证失败" }, { status: 500 });
   }
 }

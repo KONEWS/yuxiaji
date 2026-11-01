@@ -194,6 +194,7 @@ export async function GET(request: Request) {
       }),
     }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "读取放送计划失败", details: error instanceof Error ? error.message : String(error) }, { status: 500, headers: { "cache-control": "no-store" } });
+    console.error(error);
+    return Response.json({ error: "读取放送计划失败" }, { status: 500, headers: { "cache-control": "no-store" } });
   }
 }

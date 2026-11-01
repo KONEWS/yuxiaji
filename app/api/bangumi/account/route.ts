@@ -54,7 +54,8 @@ export async function POST(request: Request) {
     const [saved] = await db.select().from(bangumiAccount).where(eq(bangumiAccount.adminId, current.account.id)).limit(1);
     return Response.json({ ok: true, account: publicBinding(saved || null) }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "Bangumi 账号绑定失败", details: error instanceof Error ? error.message : String(error) }, { status: 502 });
+    console.error(error);
+    return Response.json({ error: "Bangumi 账号绑定失败" }, { status: 502 });
   }
 }
 
@@ -67,6 +68,7 @@ export async function DELETE(request: Request) {
     await getDb().delete(bangumiAccount).where(eq(bangumiAccount.adminId, current.account.id));
     return Response.json({ ok: true });
   } catch (error) {
-    return Response.json({ error: "Bangumi 账号解绑失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "Bangumi 账号解绑失败" }, { status: 500 });
   }
 }

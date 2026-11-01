@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     }
     return Response.json({ ok: true }, { headers: { "set-cookie": clearSessionCookie(), "cache-control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: "注销失败", details: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    console.error(error);
+    return Response.json({ error: "注销失败" }, { status: 500 });
   }
 }
