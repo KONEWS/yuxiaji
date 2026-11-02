@@ -95,8 +95,10 @@ export function isBackupComponentEnabledValue(value: unknown): boolean {
  */
 export async function uploadBackupToProvider(
   providerId: string,
-  _file: { name: string; text: string },
+  file: { name: string; text: string },
 ): Promise<{ ok: false; reason: string }> {
+  // 占位阶段不上传文件；保留参数签名，供接通后直接使用。
+  void file;
   const provider = getBackupProvider(providerId);
   if (!provider) throw new BackupProviderError(`未知的备份网盘：${providerId}`);
   if (!provider.ready) {

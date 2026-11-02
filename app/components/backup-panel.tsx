@@ -208,7 +208,7 @@ export function BackupPanel() {
           </button>
         </div>
       )}
-      {preImportBackup && (
+      {Boolean(preImportBackup) && (
         <div className="bangumi-binding-status">
           <span>导入前快照已生成，导入后如需回滚请先下载保存。</span>
           <button
