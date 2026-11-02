@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { BackupPanel } from "./backup-panel";
 
 type Security = {
   account: { username: string; twoFactorEnabled: boolean; mustChangePassword: boolean; sessionDuration: number };
@@ -317,6 +318,8 @@ export function SecurityPanel({ embedded = false, onClose }: { embedded?: boolea
         {animeScheduleMessage && <p className={`bangumi-binding-message ${animeScheduleError ? "error" : "success"}`} role="status" aria-live="polite">{animeScheduleMessage}</p>}
         {animeSchedule?.configured && <div className="bangumi-binding-status"><span>凭据来源：{animeSchedule.source === "settings" ? "账户安全设置" : "Worker 环境变量"}</span><span>最近验证：{animeSchedule.lastVerifiedAt ? new Date(animeSchedule.lastVerifiedAt).toLocaleString("zh-CN") : "环境变量模式"}</span>{animeSchedule.source === "settings" && <button className="auth-link" disabled={busy} onClick={unbindAnimeSchedule}>移除设置页 Token</button>}</div>}
       </section>
+      {/* 备份组件挂载点（可拆）：删掉下面这一行与 backup-panel.tsx，核心不受影响。 */}
+      <BackupPanel />
       </div>
 
       <section className="security-card security-sessions-card">
