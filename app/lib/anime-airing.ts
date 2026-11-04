@@ -251,7 +251,7 @@ export function parseAniListAiring(payload: unknown, season: string, year: numbe
     if (!subjectId || !next?.airingAt) continue;
     const nextDate = new Date(next.airingAt * 1000);
     const tokyo = getTokyoCalendarParts(nextDate);
-    const title = stringValue(item.title?.english) || stringValue(item.title?.romaji) || stringValue(item.title?.userPreferred) || stringValue(item.title?.native) || `AniList #${subjectId}`;
+    const title = stringValue(item.title?.native) || stringValue(item.title?.english) || stringValue(item.title?.romaji) || stringValue(item.title?.userPreferred) || `AniList #${subjectId}`;
     const jpTitle = stringValue(item.title?.native) || stringValue(item.title?.romaji) || stringValue(item.title?.userPreferred);
     const cover = stringValue(item.coverImage?.large ?? item.coverImage?.medium);
     schedules.push({
@@ -343,8 +343,8 @@ export function parseAnimeScheduleTimetable(payload: unknown, season: string, ye
     if (!providerId) continue;
     const tokyo = getTokyoCalendarParts(nextAirAt);
     const imageRoute = stringValue(item.imageVersionRoute);
-    const title = stringValue(item.title ?? item.english ?? item.romaji ?? item.native) || `AnimeSchedule #${providerId}`;
-    const jpTitle = stringValue(item.native ?? item.romaji);
+    const title = stringValue(item.native) || stringValue(item.title) || stringValue(item.english) || stringValue(item.romaji) || `AnimeSchedule #${providerId}`;
+    const jpTitle = stringValue(item.native) || stringValue(item.romaji);
     schedules.push({
       subjectId: stableProviderId(`animeschedule:${providerId}`),
       title,
