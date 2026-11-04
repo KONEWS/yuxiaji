@@ -3,6 +3,7 @@ import { getDb } from "../../../../db";
 import { animeAiringSchedule, userSubjects } from "../../../../db/schema";
 import { getCurrentUser } from "../../../lib/current-user";
 import { formatWeekday, nextAirAtForStoredSchedule } from "../../../lib/anime-airing-time";
+import { airingTitleKey as titleKey } from "../../../lib/airing-title-key";
 import { currentAiringSeason } from "../../../lib/anime-airing";
 import { getBangumiSubject, subjectImage } from "../../../lib/bangumi-api";
 import { requireAdminSession } from "../../../lib/admin-auth";
@@ -61,9 +62,7 @@ async function hydrateFallbackTitles(rows: AiringRow[]) {
   });
 }
 
-function titleKey(value: string) {
-  return value.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
-}
+
 
 function mergeRows(rows: AiringRow[]) {
   const priority: Record<string, number> = { bangumi: 1, anilist: 2, animeschedule: 3, custom: 4 };
