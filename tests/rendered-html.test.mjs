@@ -5,15 +5,42 @@ import { unstable_dev } from "wrangler";
 
 let worker;
 
-function fetchLocal(path, init = {}) {
+function isTransientFetchError(error) {
+  // Only the request itself failing is retried: a timeout abort, a reset
+  // connection, or another undici socket error. Assertion failures happen
+  // after fetch returns a response, so they never reach this check.
+  if (!error || typeof error !== "object") return false;
+  if (error.name === "AbortError" || error.name === "TimeoutError") return true;
+  const code = typeof error.code === "string" ? error.code : "";
+  if (code === "ECONNRESET" || code === "EPIPE" || code.startsWith("UND_ERR_")) return true;
+  const cause = error.cause;
+  return Boolean(cause && typeof cause === "object" && typeof cause.code === "string"
+    && (cause.code === "ECONNRESET" || cause.code === "EPIPE" || cause.code.startsWith("UND_ERR_")));
+}
+
+async function fetchLocal(path, init = {}) {
   // Use the real HTTP origin. unstable_dev.fetch rewrites it to a placeholder
   // and can stall on a redirect after a POST is rejected before reading its body.
   const url = new URL(path, `http://${worker.address}:${worker.port}`);
   // Do not reuse a connection after an early authorization rejection, whose
   // request body may not have been consumed by the local Worker proxy.
-  return fetch(url, { signal: AbortSignal.timeout(15000), ...init,
-    headers: { ...init.headers, connection: "close" },
-  });
+  // The local Worker proxy occasionally stalls a request (observed in CI as a
+  // 15s abort with an empty error, and locally as ECONNRESET on the 21 MiB
+  // probe), so retry once on a transient fetch failure. Each attempt gets a
+  // fresh 15s timeout; assertion failures are untouched because they happen
+  // after fetch returns.
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await fetch(url, { signal: AbortSignal.timeout(15000), ...init,
+        headers: { ...init.headers, connection: "close" },
+      });
+    } catch (error) {
+      if (!isTransientFetchError(error)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 async function uploadRequest(form) {
