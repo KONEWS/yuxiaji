@@ -6,8 +6,8 @@ import { mediaMeta, mediaSettings, primaryStatusMeta, secondaryStatusMeta, week 
 import { isCollectionMediaType, normalizeMediaType, tagDisplayName, type TagPreferences, type VideoSubtypeLabels, type VisualSubtypeLabels } from "../../lib/constants";
 import { formatAiringCountdown, formatWeekday, isLongRunningSchedule } from "../../lib/anime-airing-time";
 import { isTrackedCalendarEntry } from "../../lib/calendar-tracking";
-import { normalizeMediaImages, type AiringSchedule, type Anime, type CalendarDay, type CalendarEntry, type LayoutMode, type MediaTab, type MediaType, type SortMode, type Status, type TagEntry, type WeekDay } from "../../lib/tracker-types";
-import { CoverImage, Rating, RoundedSelect, coverPositionStyle } from "./common";
+import { mediaImageUrl, normalizeMediaImages, type AiringSchedule, type Anime, type CalendarDay, type CalendarEntry, type LayoutMode, type MediaTab, type MediaType, type SortMode, type Status, type TagEntry, type WeekDay } from "../../lib/tracker-types";
+import { CoverImage, Rating, RoundedSelect } from "./common";
 import { LazyPanel } from "./lazy-panel";
 import { CollectionPager, useCollectionPage } from "./collection-pager";
 import { TagManagerModal } from "./lazy-dialogs";
@@ -18,7 +18,7 @@ function MusicCard({ item, titleMode, onDetails, onRate, selectionMode, selected
   return <article className={`music-record ${selected ? "batch-selected" : ""}`}>
     <div className="music-record-art">
       <button type="button" className="music-record-cover" onClick={() => onDetails(item.id)} aria-label={`查看${title}详情`}>
-        <CoverImage key={cover} className="music-record-image" src={cover} alt={`${title}封面`} placeholder="♫" style={coverPositionStyle(item.metadata?.coverPositionX, item.metadata?.coverPositionY, item.metadata?.coverZoom)} />
+        <CoverImage key={cover} className="music-record-image" src={cover} alt={`${title}封面`} placeholder="♫" framing={item.metadata || {}} />
         <span className="music-record-open" aria-hidden="true">查看唱片 ↗</span>
       </button>
       {typeof indexNo === "number" && <span className="music-record-no" aria-hidden="true">NO.{String(indexNo).padStart(3, "0")}</span>}
@@ -45,7 +45,7 @@ function MusicListRow({ item, titleMode, onDetails, selectionMode, selected, onS
     <div className="music-list-song">
       {selectionMode && <label className="batch-checkbox" aria-label={`选择${item.title}`}><input type="checkbox" checked={selected} onChange={() => onSelect(item.id)} /></label>}
       <button type="button" className="music-list-cover" onClick={() => onDetails(item.id)} aria-label={`查看${displayTitle}详情`}>
-        <CoverImage key={cover} className="music-list-cover-image" src={cover} alt={`${item.title}封面`} placeholder={item.title.slice(0, 2)} style={coverPositionStyle(item.metadata?.coverPositionX, item.metadata?.coverPositionY, item.metadata?.coverZoom)} />
+        <CoverImage key={cover} className="music-list-cover-image" src={cover} alt={`${item.title}封面`} placeholder={item.title.slice(0, 2)} framing={item.metadata || {}} />
       </button>
       <div className="music-list-info">
         {typeof indexNo === "number" && <span className="music-list-no" aria-hidden="true">NO.{String(indexNo).padStart(3, "0")}</span>}
@@ -112,8 +112,9 @@ function AnimeCard({ item, onAdjust, onDetails, onRate, titleMode, layout, visua
   const airing = mediaType === "anime" && item.subjectId ? airingBySubjectId?.get(item.subjectId) : undefined;
   const isVisual = mediaType === "visual";
   const isVideo = mediaType === "video";
-  const cover = isVisual ? item.thumbnail || "" : item.image || (isVideo ? item.thumbnail || "" : mediaType === "anime" && item.subjectId && item.source === "bangumi" ? highResCoverUrl(item.jp || item.title) : "");
-  const galleryCount = isVisual ? normalizeMediaImages(item.images, item.thumbnail || "").length : 0;
+  const galleryImages = isVisual ? normalizeMediaImages(item.images, item.thumbnail || "") : [];
+  const cover = isVisual ? mediaImageUrl(galleryImages.find((image) => image.isCover) || galleryImages[0]) : item.image || (isVideo ? item.thumbnail || "" : mediaType === "anime" && item.subjectId && item.source === "bangumi" ? highResCoverUrl(item.jp || item.title) : "");
+  const galleryCount = galleryImages.length;
   const setting = mediaSettings[mediaType];
   const isMusic = mediaType === "music";
   const unit = item.unit || setting.unit;
@@ -136,7 +137,7 @@ function AnimeCard({ item, onAdjust, onDetails, onRate, titleMode, layout, visua
     <div className="anime-list-actions">{!isMusic && !isVisual && !isVideo && <><button className="square" onClick={() => onAdjust(item.id, -setting.step)} aria-label="撤销上次进度">−</button><button className="record" onClick={() => onAdjust(item.id, setting.step)}>{setting.action}</button></>}<button className="text-button" onClick={() => onDetails(item.id)}>详情 <span>↗</span></button></div>
   </article>;
   return <article className={`anime-card ${selected ? "batch-selected" : ""}`}>
-    <div className={`anime-poster poster-${item.kind} ${isVisual ? "gallery-poster" : ""}`}>{selectionMode && <label className="batch-checkbox poster-checkbox" aria-label={`选择${item.title}`}><input type="checkbox" checked={selected} onChange={() => onSelect(item.id)} /></label>}<CoverImage key={cover} className="anime-cover-image" src={cover} alt={`${item.title}封面`} placeholder={item.title.slice(0, 2)} style={coverPositionStyle(item.metadata?.coverPositionX, item.metadata?.coverPositionY, item.metadata?.coverZoom)} />{statusLabel && <span>{statusLabel}</span>}{isVisual && galleryCount > 1 && <em className="gallery-count" aria-label={`共 ${galleryCount} 张图片`}>＋{galleryCount - 1}</em>}</div>
+    <div className={`anime-poster poster-${item.kind} ${isVisual ? "gallery-poster" : ""}`}>{selectionMode && <label className="batch-checkbox poster-checkbox" aria-label={`选择${item.title}`}><input type="checkbox" checked={selected} onChange={() => onSelect(item.id)} /></label>}<CoverImage key={cover} className="anime-cover-image" src={cover} alt={`${item.title}封面`} placeholder={item.title.slice(0, 2)} framing={item.metadata || {}} fit={isVisual ? "contain" : "cover"} />{statusLabel && <span className="poster-status">{statusLabel}</span>}{isVisual && galleryCount > 1 && <em className="gallery-count" aria-label={`共 ${galleryCount} 张图片`}>＋{galleryCount - 1}</em>}</div>
     <div className="anime-info">
       <div className="anime-title"><div><h3>{displayTitle}</h3><p><span className={`media-badge media-${mediaType}`}>{mediaMeta.find(([id]) => id === mediaType)?.[1]}</span>{sourceLabel} · 个人评分 {item.score ? item.score.toFixed(1) : "未评"}</p></div><button type="button" className="mobile-detail-trigger" onClick={() => onDetails(item.id)}>详情</button></div>
       {item.next && <div className="next-episode">{item.next}</div>}

@@ -5,6 +5,7 @@ import { userSubjects } from "../../db/schema";
 import { authenticateAgent, isAgentIdentity } from "./agent-auth";
 import { agentJson, finishAgentOperation, reserveAgentOperation } from "./agent-operations";
 import { normalizeMediaMetadata } from "./constants";
+import { defaultCoverFraming } from "./cover-framing";
 import { chatGPTFileUrl, downloadCoverImage, transformCoverImage, type CoverImagesBinding } from "./mcp-file-image";
 import { duplicateUploadWarning, findUploadDuplicate } from "./upload-duplicates";
 
@@ -68,7 +69,7 @@ export async function uploadMusicCover(request: Request, processImage?: (bytes: 
     try { metadata = JSON.parse(existing.metadata); } catch { metadata = {}; }
     stage = "attach";
     const [saved] = await db.update(userSubjects).set({
-      image, metadata: JSON.stringify(normalizeMediaMetadata({ ...metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 })), updatedAt: new Date(),
+      image, metadata: JSON.stringify(normalizeMediaMetadata({ ...metadata, ...defaultCoverFraming })), updatedAt: new Date(),
     }).where(and(conditions, eq(userSubjects.title, body.expectedTitle), eq(userSubjects.updatedAt, existing.updatedAt))).returning({ id: userSubjects.id });
     if (!saved) throw new Error("音乐条目已被其他操作修改");
     attached = true;

@@ -4,6 +4,7 @@ import { userDevices } from "../../../db/schema";
 import { getCurrentUser } from "../../lib/current-user";
 import { finishAgentOperation, reserveAgentOperation } from "../../lib/agent-operations";
 import { guardBrowserApi } from "../../lib/admin-auth";
+import { clampCoverOffset, clampCoverPosition, clampCoverZoom } from "../../lib/cover-framing";
 
 const DEVICE_STATUSES = ["active", "backup", "retired"];
 const CURRENCIES = ["CNY"];
@@ -34,18 +35,6 @@ function serializeTags(tags: unknown): string {
   return JSON.stringify(parseTags(tags));
 }
 
-function parseCoverPosition(value: unknown) {
-  if (value === undefined || value === null || value === "") return 50;
-  const position = Number(value);
-  return Number.isFinite(position) ? Math.round(Math.min(100, Math.max(0, position))) : 50;
-}
-
-function parseCoverZoom(value: unknown) {
-  if (value === undefined || value === null || value === "") return 100;
-  const zoom = Number(value);
-  return Number.isFinite(zoom) ? Math.round(Math.min(240, Math.max(100, zoom))) : 100;
-}
-
 export function sanitizeDevice(body: Record<string, unknown>) {
   const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
   const category = normalizeCategory(body.category);
@@ -57,9 +46,6 @@ export function sanitizeDevice(body: Record<string, unknown>) {
   const purchaseDate = typeof body.purchaseDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.purchaseDate) ? body.purchaseDate : null;
   const receiptImage = typeof body.receiptImage === "string" ? body.receiptImage.trim().slice(0, 500) : "";
   const coverImage = typeof body.coverImage === "string" ? body.coverImage.trim().slice(0, 500) : "";
-  const coverPositionX = parseCoverPosition(body.coverPositionX);
-  const coverPositionY = parseCoverPosition(body.coverPositionY);
-  const coverZoom = parseCoverZoom(body.coverZoom);
   const rating = Number(body.rating);
   const review = typeof body.review === "string" ? body.review.trim().slice(0, 2000) : "";
   return {
@@ -72,9 +58,11 @@ export function sanitizeDevice(body: Record<string, unknown>) {
     purchaseDate,
     receiptImage,
     coverImage,
-    coverPositionX,
-    coverPositionY,
-    coverZoom,
+    coverPositionX: clampCoverPosition(body.coverPositionX),
+    coverPositionY: clampCoverPosition(body.coverPositionY),
+    coverZoom: clampCoverZoom(body.coverZoom),
+    coverOffsetX: clampCoverOffset(body.coverOffsetX),
+    coverOffsetY: clampCoverOffset(body.coverOffsetY),
     tags: serializeTags(body.tags),
     rating: Number.isInteger(rating) && rating >= 1 && rating <= 10 ? rating : null,
     review,
@@ -147,6 +135,8 @@ export async function POST(request: Request) {
         coverPositionX: body.coverPositionX === undefined ? existing.coverPositionX : next.coverPositionX,
         coverPositionY: body.coverPositionY === undefined ? existing.coverPositionY : next.coverPositionY,
         coverZoom: body.coverZoom === undefined ? existing.coverZoom : next.coverZoom,
+        coverOffsetX: body.coverOffsetX === undefined ? existing.coverOffsetX : next.coverOffsetX,
+        coverOffsetY: body.coverOffsetY === undefined ? existing.coverOffsetY : next.coverOffsetY,
       };
       await db.update(userDevices).set(update).where(and(eq(userDevices.id, requestedId), eq(userDevices.userKey, key)));
       device = { ...existing, ...update, id: requestedId };

@@ -1,4 +1,6 @@
 /** Content-only MCP tools. All paths are fixed; URLs in records are stored data. */
+import { MAX_COVER_OFFSET, MAX_COVER_ZOOM, MIN_COVER_ZOOM } from "./cover-framing";
+
 type JsonObject = Record<string, unknown>;
 type InputSchema = {
   type: "object";
@@ -55,6 +57,14 @@ const keyField: FieldSchema = {
   description: "Stable unique key for this intended write. Reuse exactly this key when retrying; use a new key for a different change.",
 };
 const paginationFields = { limit: integer(1, 50), offset: integer(0, 100000) };
+const coverOffset: FieldSchema = {
+  type: "number", minimum: -MAX_COVER_OFFSET, maximum: MAX_COVER_OFFSET,
+  description: "Pan as a percentage of the larger of the frame or scaled image dimension on this axis. Rounded to two decimals; zero centers the offset.",
+};
+const coverFramingFields = {
+  coverPositionX: integer(0, 100), coverPositionY: integer(0, 100), coverZoom: integer(MIN_COVER_ZOOM, MAX_COVER_ZOOM),
+  coverOffsetX: coverOffset, coverOffsetY: coverOffset,
+};
 const metadataFields: Record<string, FieldSchema> = {
   overview: text(5000), overviewOverride: { type: "boolean" }, genres: strings(30),
   duration: { ...text(8), pattern: DURATION_PATTERN, description: "Duration as MM:SS or HH:MM:SS, e.g. 03:59. Empty string clears it." },
@@ -64,7 +74,7 @@ const metadataFields: Record<string, FieldSchema> = {
   originalTitle: text(160), runtime: integer(1, 10000), platforms: strings(30), developers: strings(30, 160),
   tmdbId: integer(1, 100000000), vndbId: { ...text(40), pattern: "^v[0-9]+$" },
   bookKind: enumeration(["book", "light_novel"]),
-  coverPositionX: integer(0, 100), coverPositionY: integer(0, 100), coverZoom: integer(100, 240),
+  ...coverFramingFields,
 };
 // General edits never accept arbitrary metadata maps, owner identities, tokens,
 // image-list replacement, or a media-type change on an existing row.
@@ -89,7 +99,7 @@ const deviceFields: Record<string, FieldSchema> = {
   price: { type: ["number", "null"], minimum: 0, maximum: 1000000000000 }, currency: enumeration(["CNY"]),
   purchaseDate: { type: ["string", "null"], format: "date" },
   receiptImage: uri(500, true), coverImage: uri(500, true),
-  coverPositionX: integer(0, 100), coverPositionY: integer(0, 100), coverZoom: integer(100, 240),
+  ...coverFramingFields,
   tags: strings(12), rating: nullableInteger(1, 10), review: text(2000),
 };
 const storageFields: Record<string, FieldSchema> = {

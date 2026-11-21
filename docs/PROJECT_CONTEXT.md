@@ -52,7 +52,7 @@ OpenClaw 调用链：外部 OpenClaw 主机 → `Authorization: Bearer …` → 
 
 ## 4. 数据模型
 
-Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0025`。
+Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0027`。
 
 | 表 | 用途 |
 | --- | --- |
@@ -69,6 +69,8 @@ Schema：`db/schema.ts`；SQL 迁移：`drizzle/0000` 至 `0025`。
 | `mcp_oauth_clients`、`mcp_oauth_grants`、`mcp_oauth_codes`、`mcp_oauth_tokens` | ChatGPT 内容连接、权限、一次性授权码与哈希令牌 |
 
 `user_state.anime_json` 是历史兼容字段，当前 `/api/state` 不从中读写媒体；创建偏好行时仅写 `[]` 以满足 NOT NULL。`user_subjects.thumbnail` 保留兼容画廊主封面，多图以图片表为准。
+
+封面构图支持 25% 到 500% 缩放。媒体将 `coverOffsetX` 和 `coverOffsetY` 存入 metadata。藏品通过迁移 `0027_cover_offsets.sql` 在 `user_devices` 增加 `cover_offset_x` 和 `cover_offset_y` 两个 REAL 字段，默认值为 0。已有焦点与缩放继续生效。平移按每个轴的封面框尺寸与缩放后图片尺寸中的较大者计算，范围为 −50% 到 50%，保留两位小数。
 
 `media_storage_links` 已增加 `state/operationKey/objectCount/totalBytes/manifestSha256/verifiedAt`（迁移 `0024_salty_nightshade.sql`）；本轮已应用生产 D1 迁移并部署对应 Worker。SQL `0023_classy_jetstream.sql` 包含每条媒体最多 12 个链接的触发器与主存储唯一索引。更改 schema 时不能忽略这些数据库层约束。
 

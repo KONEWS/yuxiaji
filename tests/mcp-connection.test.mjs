@@ -144,7 +144,10 @@ test("music cover tool declares native ChatGPT file inputs and restricts writes 
 });
 
 test("music cover upload stores a display image, preserves song fields, reads back and replays without downloading again", async () => {
-  const media = successful(await call("create_media", { type: "music", title: "Cover roundtrip", musicArtist: "Artist", musicAlbum: "Album", tags: ["keep"], score: 9, metadata: { duration: "03:42", overview: "Keep overview", coverZoom: 150 }, idempotencyKey: "cover-roundtrip-create" })).media;
+  const media = successful(await call("create_media", { type: "music", title: "Cover roundtrip", musicArtist: "Artist", musicAlbum: "Album", tags: ["keep"], score: 9, metadata: { duration: "03:42", overview: "Keep overview", coverZoom: 25, coverOffsetX: 11.25, coverOffsetY: -6.03 }, idempotencyKey: "cover-roundtrip-create" })).media;
+  assert.equal(media.metadata.coverZoom, 25);
+  assert.equal(media.metadata.coverOffsetX, 11.25);
+  assert.equal(media.metadata.coverOffsetY, -6.03);
   const base = { id: media.id, expectedTitle: media.title, idempotencyKey: "cover-roundtrip", file: { file_id: "file-roundtrip", download_url: "https://files.oaiusercontent.com/fixture.webp?temporary-secret=do-not-log", mime_type: "image/webp", file_name: "cover.webp" } };
   const result = successful(await call("upload_music_cover", base));
   assert.match(result.media.image, /^\/api\/media-assets\?v=\d+$/);
@@ -155,6 +158,8 @@ test("music cover upload stores a display image, preserves song fields, reads ba
   assert.equal(result.media.metadata.duration, "03:42");
   assert.equal(result.media.metadata.overview, "Keep overview");
   assert.equal(result.media.metadata.coverZoom, 100);
+  assert.equal(result.media.metadata.coverOffsetX, 0);
+  assert.equal(result.media.metadata.coverOffsetY, 0);
   const image = await fetchLocal(result.media.image, { headers: { cookie: adminCookie } });
   assert.equal(image.status, 200);
   assert.equal(image.headers.get("content-type"), "image/webp");
@@ -187,7 +192,7 @@ test("renamed identical music files warn without replacing the cover, resetting 
   const media = successful(await call("create_media", { type: "music", title: "Duplicate cover", idempotencyKey: "duplicate-cover-create" })).media;
   const base = { id: media.id, expectedTitle: media.title, idempotencyKey: "duplicate-cover-first", file: { file_id: "file-duplicate-first", download_url: "https://files.oaiusercontent.com/fixture.webp", file_name: "first.webp" } };
   const first = successful(await call("upload_music_cover", base));
-  successful(await call("update_media", { id: media.id, metadata: { coverZoom: 140 }, idempotencyKey: "duplicate-cover-crop" }));
+  successful(await call("update_media", { id: media.id, metadata: { coverZoom: 500, coverOffsetX: -23.01 }, idempotencyKey: "duplicate-cover-crop" }));
   const objectsBefore = await (await fetchLocal("/__test/assets")).json();
   const transformsBefore = (await (await fetchLocal("/__test/image-downloads")).json()).transforms;
   const repeat = { ...base, idempotencyKey: "duplicate-cover-renamed", file: { ...base.file, file_id: "file-renamed", file_name: "renamed.webp" } };
@@ -197,7 +202,8 @@ test("renamed identical music files warn without replacing the cover, resetting 
   assert.equal(duplicate.warnings[0].code, "duplicate_file");
   assert.equal(duplicate.warnings[0].existingId, media.id);
   assert.equal(duplicate.media.image, first.media.image);
-  assert.equal(duplicate.media.metadata.coverZoom, 140);
+  assert.equal(duplicate.media.metadata.coverZoom, 500);
+  assert.equal(duplicate.media.metadata.coverOffsetX, -23.01);
   assert.deepEqual(await (await fetchLocal("/__test/assets")).json(), objectsBefore);
   assert.equal((await (await fetchLocal("/__test/image-downloads")).json()).transforms, transformsBefore);
   const replay = successful(await call("upload_music_cover", { ...repeat, file: { ...repeat.file, download_url: "https://files.oaiusercontent.com/expired.webp" } }));
@@ -634,15 +640,18 @@ test("device partial updates preserve price, tags, category, review, and cover c
   const initial = successful(await call("create_device", {
     name: "Fixture headphones", category: "audio", subCategory: "headphones", status: "backup", price: 1250.5,
     purchaseDate: "2026-10-13", rating: 8, tags: ["wired", "desk"], review: "Keep this review",
-    coverPositionX: 30, coverPositionY: 70, coverZoom: 125, idempotencyKey: "device-create",
+    coverPositionX: 30, coverPositionY: 70, coverZoom: 500, coverOffsetX: 11.25, coverOffsetY: -50, idempotencyKey: "device-create",
   })).device;
   const updated = successful(await call("update_device", { id: initial.id, name: "Renamed headphones", idempotencyKey: "device-name-patch" })).device;
   assert.equal(updated.name, "Renamed headphones");
-  for (const key of ["category", "subCategory", "status", "price", "purchaseDate", "rating", "review", "coverPositionX", "coverPositionY", "coverZoom"]) assert.equal(updated[key], initial[key], key);
+  for (const key of ["category", "subCategory", "status", "price", "purchaseDate", "rating", "review", "coverPositionX", "coverPositionY", "coverZoom", "coverOffsetX", "coverOffsetY"]) assert.equal(updated[key], initial[key], key);
   assert.deepEqual(updated.tags, initial.tags);
   const reread = successful(await call("get_device", { id: initial.id })).device;
   assert.equal(reread.price, initial.price);
   assert.equal(reread.review, initial.review);
+  assert.equal(reread.coverZoom, 500);
+  assert.equal(reread.coverOffsetX, 11.25);
+  assert.equal(reread.coverOffsetY, -50);
   assert.deepEqual(reread.tags, initial.tags);
 });
 

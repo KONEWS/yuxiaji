@@ -130,6 +130,8 @@ export type Device = {
   coverPositionX: number;
   coverPositionY: number;
   coverZoom: number;
+  coverOffsetX: number;
+  coverOffsetY: number;
   tags: string[];
   rating: number | null;
   review: string;
@@ -148,6 +150,8 @@ export type DeviceForm = {
   coverPositionX: number;
   coverPositionY: number;
   coverZoom: number;
+  coverOffsetX: number;
+  coverOffsetY: number;
   tags: string;
   rating: string;
   review: string;

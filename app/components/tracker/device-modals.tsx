@@ -7,6 +7,7 @@ import { useDialogBehavior } from "./use-dialog-behavior";
 import { uploadDeviceAsset } from "../../lib/client-api";
 import { DEVICE_STATUSES, type DeviceCategoryDefinition, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap } from "../../lib/constants";
 import type { Device, DeviceForm } from "../../lib/tracker-types";
+import { defaultCoverFraming } from "../../lib/cover-framing";
 import { CoverPositionEditor, RoundedSelect } from "./common";
 
 function DeviceModal({ form, setForm, device, categories, subCategories, close, submit }: { form: DeviceForm; setForm: Dispatch<SetStateAction<DeviceForm | null>>; device: Device | null; categories: DeviceCategoryDefinition[]; subCategories: DeviceSubCategoryMap; close: () => void; submit: () => Promise<void> }) {
@@ -37,7 +38,7 @@ function DeviceModal({ form, setForm, device, categories, subCategories, close, 
       setForm((current) => current ? {
         ...current,
         [purpose === "receipt" ? "receiptImage" : "coverImage"]: payload.url,
-        ...(purpose === "cover" ? { coverPositionX: 50, coverPositionY: 50, coverZoom: 100 } : {}),
+        ...(purpose === "cover" ? defaultCoverFraming : {}),
       } : current);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "图片上传失败，可改用图片地址");
@@ -56,7 +57,7 @@ function DeviceModal({ form, setForm, device, categories, subCategories, close, 
       <label>入手日期<input type="date" value={form.purchaseDate} onChange={(event) => setForm({ ...form, purchaseDate: event.target.value })} /></label>
       <label>评分（1-10）<RoundedSelect value={form.rating} onChange={(rating) => setForm({ ...form, rating })} options={[{ value: "", label: "未评分" }, ...Array.from({ length: 10 }, (_, index) => ({ value: String(index + 1), label: `${index + 1} 分` }))]} ariaLabel="设备评分" /></label>
       <label className="wide">特性标签<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="用逗号分隔，例如：平头塞，LDAC，3DoF" /></label>
-      <div className="wide device-cover-field"><label>封面图片<input type="url" value={form.coverImage} onChange={(event) => setForm({ ...form, coverImage: event.target.value })} placeholder="图片地址，或从本地上传" /></label><input ref={coverInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "cover")} /><ActionButton type="button" className="upload-button" onClick={() => coverInput.current?.click()} disabled={uploading === "cover"}>{uploading === "cover" ? "上传中…" : "上传封面"}</ActionButton>{form.coverImage && <CoverPositionEditor src={form.coverImage} x={form.coverPositionX} y={form.coverPositionY} zoom={form.coverZoom} alt="藏品封面位置预览" onChange={(coverPositionX, coverPositionY, coverZoom) => setForm({ ...form, coverPositionX, coverPositionY, coverZoom: coverZoom ?? form.coverZoom })} />}</div>
+      <div className="wide device-cover-field"><label>封面图片<input type="url" value={form.coverImage} onChange={(event) => setForm({ ...form, coverImage: event.target.value, ...defaultCoverFraming })} placeholder="图片地址，或从本地上传" /></label><input ref={coverInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "cover")} /><ActionButton type="button" className="upload-button" onClick={() => coverInput.current?.click()} disabled={uploading === "cover"}>{uploading === "cover" ? "上传中…" : "上传封面"}</ActionButton>{form.coverImage && <CoverPositionEditor src={form.coverImage} x={form.coverPositionX} y={form.coverPositionY} zoom={form.coverZoom} offsetX={form.coverOffsetX} offsetY={form.coverOffsetY} alt="藏品封面位置预览" onChange={(coverPositionX, coverPositionY, coverZoom, coverOffsetX, coverOffsetY) => setForm({ ...form, coverPositionX, coverPositionY, coverZoom, coverOffsetX, coverOffsetY })} />}</div>
       <label className="wide">购买凭证截图<input type="url" value={form.receiptImage} onChange={(event) => setForm({ ...form, receiptImage: event.target.value })} placeholder="订单截图地址，或从本地上传" /><input ref={receiptInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" style={{ display: "none" }} onChange={(event) => void upload(event.target.files?.[0], "receipt")} /><ActionButton type="button" className="upload-button" onClick={() => receiptInput.current?.click()} disabled={uploading === "receipt"}>{uploading === "receipt" ? "上传中…" : "上传凭证"}</ActionButton>{form.receiptImage && <span className="cover-preview"><img src={form.receiptImage} alt="凭证预览" referrerPolicy="no-referrer" /><b>已上传凭证</b></span>}</label>
       <label className="wide">评价<textarea value={form.review} onChange={(event) => setForm({ ...form, review: event.target.value })} placeholder="使用感受、购入理由…" /></label>
     </div>
