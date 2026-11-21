@@ -3,6 +3,9 @@
  * 媒体 9 大分类 + 装备 4 大类与细分子类。
  */
 
+// @ts-expect-error Node's native TypeScript tests require the explicit extension.
+import { clampCoverPosition, clampCoverZoom, clampCoverOffset } from "./cover-framing.ts";
+
 /** 媒体分类（与 db/schema.ts user_subjects.type 一一对应） */
 export const MEDIA_CATEGORIES = [
   { id: "anime", label: "动画", icon: "动" },
@@ -70,6 +73,9 @@ export type MediaMetadata = {
   coverPositionY?: number;
   /** Cover scale percentage used by the position editor (100 is the default). */
   coverZoom?: number;
+  /** Pan per axis as a percentage of the larger of the frame or scaled image dimension. */
+  coverOffsetX?: number;
+  coverOffsetY?: number;
 };
 
 export const SYNC_PROVIDERS = ["bangumi", "vndb"] as const;
@@ -157,21 +163,7 @@ export function normalizeMediaMetadata(value?: unknown): MediaMetadata {
   };
   const fieldSources = stringMap(source.fieldSources, 20) as MediaFieldSources;
   const bookKind = source.bookKind === "book" || source.bookKind === "light_novel" ? source.bookKind : undefined;
-  const coverPosition = (candidate: unknown) => {
-    const number = Number(candidate);
-    return candidate !== undefined && candidate !== null && candidate !== "" && Number.isFinite(number)
-      ? Math.round(Math.min(100, Math.max(0, number)))
-      : undefined;
-  };
-  const coverPositionX = coverPosition(source.coverPositionX);
-  const coverPositionY = coverPosition(source.coverPositionY);
-  const coverZoom = (candidate: unknown) => {
-    const number = Number(candidate);
-    return candidate !== undefined && candidate !== null && candidate !== "" && Number.isFinite(number)
-      ? Math.round(Math.min(240, Math.max(100, number)))
-      : undefined;
-  };
-  const normalizedCoverZoom = coverZoom(source.coverZoom);
+  const hasCoverValue = (value: unknown) => value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value));
   return {
     director: typeof source.director === "string" ? source.director.trim().slice(0, 160) : "",
     actors,
@@ -201,9 +193,11 @@ export function normalizeMediaMetadata(value?: unknown): MediaMetadata {
     ...(Object.keys(fieldSources).length ? { fieldSources } : {}),
     ...(bookKind ? { bookKind } : {}),
     ...(typeof source.calendarTracking === "boolean" ? { calendarTracking: source.calendarTracking } : {}),
-    ...(coverPositionX !== undefined ? { coverPositionX } : {}),
-    ...(coverPositionY !== undefined ? { coverPositionY } : {}),
-    ...(normalizedCoverZoom !== undefined ? { coverZoom: normalizedCoverZoom } : {}),
+    ...(hasCoverValue(source.coverPositionX) ? { coverPositionX: clampCoverPosition(source.coverPositionX) } : {}),
+    ...(hasCoverValue(source.coverPositionY) ? { coverPositionY: clampCoverPosition(source.coverPositionY) } : {}),
+    ...(hasCoverValue(source.coverZoom) ? { coverZoom: clampCoverZoom(source.coverZoom) } : {}),
+    ...(hasCoverValue(source.coverOffsetX) ? { coverOffsetX: clampCoverOffset(source.coverOffsetX) } : {}),
+    ...(hasCoverValue(source.coverOffsetY) ? { coverOffsetY: clampCoverOffset(source.coverOffsetY) } : {}),
   };
 }
 

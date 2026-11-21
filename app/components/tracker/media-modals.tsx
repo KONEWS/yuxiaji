@@ -5,21 +5,24 @@ import { useDialogBehavior } from "./use-dialog-behavior";
 import { normalizeEditableProgress } from "../../lib/media-progress";
 import { isTrackedCalendarEntry } from "../../lib/calendar-tracking";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { fetchSubjectDetail, highResCoverUrl, loadAiringSchedules, removeCustomAiring, removeMediaStorageLink, saveCustomAiring, saveMediaStorageLink, syncAiringSchedules, type MediaStorageLink } from "../../lib/client-api";
 import { normalizeMediaSource } from "../../lib/media-source";
 import { isLongRunningSchedule } from "../../lib/anime-airing-time";
 import { mediaMeta, mediaSettings, splitTags, week } from "../../lib/tracker-data";
 import { normalizeMediaMetadata, normalizeVideoSubtype, normalizeVisualSubtype, type SyncSettings, type VideoSubtypeLabels, type VisualSubtypeLabels } from "../../lib/constants";
 import { MAX_GALLERY_IMAGES, mediaImageUrl, normalizeMediaImages, type AddForm, type AiringSchedule, type Anime, type BangumiDetail, type CalendarDay, type CalendarEntry, type MediaImage, type MediaType, type SearchResult, type TagEntry, type TagPreferences, type WeekDay } from "../../lib/tracker-types";
-import { CoverImage, CoverPositionEditor, Rating, RoundedSelect, coverPositionStyle } from "./common";
+import { CoverImage, CoverPositionEditor, Rating, RoundedSelect } from "./common";
+import { defaultCoverFraming, type CoverFraming } from "../../lib/cover-framing";
 
 function CalendarPoster({ item }: { item: CalendarEntry }) {
   const src = item.coverUrl || highResCoverUrl(item.coverQuery);
   return <CoverImage key={src} className="calendar-poster" src={src} alt={`${item.title}封面`} placeholder={item.title.slice(0, 1)} />;
 }
 
-function CoverField({ value, previewValue, label, placeholder, previewAlt, inputId, uploading, positionX, positionY, zoom, onChange, onUpload, onPositionChange }: {
+type CoverPositionChange = ComponentProps<typeof CoverPositionEditor>["onChange"];
+
+function CoverField({ value, previewValue, label, placeholder, previewAlt, inputId, uploading, framing, onChange, onUpload, onPositionChange }: {
   value: string;
   previewValue?: string;
   label: string;
@@ -27,16 +30,14 @@ function CoverField({ value, previewValue, label, placeholder, previewAlt, input
   previewAlt: string;
   inputId: string;
   uploading: boolean;
-  positionX?: number;
-  positionY?: number;
-  zoom?: number;
+  framing?: CoverFraming;
   onChange: (value: string) => void;
   onUpload: (file?: File) => void | Promise<void>;
-  onPositionChange: (x: number, y: number, zoom?: number) => void;
+  onPositionChange: CoverPositionChange;
 }) {
   const urlInputId = `${inputId}-url`;
   const preview = previewValue || value;
-  return <div className="wide detail-image-field"><label htmlFor={urlInputId}>{label}</label><input id={urlInputId} type="url" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><div className="detail-image-upload"><span className="file-picker"><input id={inputId} className="file-picker-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; void onUpload(file); }} disabled={uploading} /><ActionButton type="button" className="file-picker-button" onClick={() => document.getElementById(inputId)?.click()} disabled={uploading}>{uploading ? "上传中…" : "上传封面"}</ActionButton><small>{preview ? "已选择图片" : "未选择文件"}</small></span></div>{preview && <CoverPositionEditor src={preview} x={positionX} y={positionY} zoom={zoom} alt={previewAlt} onChange={onPositionChange} />}</div>;
+  return <div className="wide detail-image-field"><label htmlFor={urlInputId}>{label}</label><input id={urlInputId} type="url" value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><div className="detail-image-upload"><span className="file-picker"><input id={inputId} className="file-picker-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; void onUpload(file); }} disabled={uploading} /><ActionButton type="button" className="file-picker-button" onClick={() => document.getElementById(inputId)?.click()} disabled={uploading}>{uploading ? "上传中…" : "上传封面"}</ActionButton><small>{preview ? "已选择图片" : "未选择文件"}</small></span></div>{preview && <CoverPositionEditor src={preview} x={framing?.coverPositionX} y={framing?.coverPositionY} zoom={framing?.coverZoom} offsetX={framing?.coverOffsetX} offsetY={framing?.coverOffsetY} alt={previewAlt} onChange={onPositionChange} />}</div>;
 }
 
 const STORAGE_PROVIDERS = [
@@ -89,15 +90,13 @@ function StorageLinksField({ mediaId, initialLinks, onChange }: { mediaId: numbe
   </div>;
 }
 
-function GalleryImagesField({ images, inputId, uploading, positionX, positionY, zoom, onChange, onPositionChange, uploadImage }: {
+function GalleryImagesField({ images, inputId, uploading, framing, onChange, onPositionChange, uploadImage }: {
   images: MediaImage[];
   inputId: string;
   uploading: boolean;
-  positionX?: number;
-  positionY?: number;
-  zoom?: number;
+  framing?: CoverFraming;
   onChange: (images: MediaImage[]) => void;
-  onPositionChange: (x: number, y: number, zoom?: number) => void;
+  onPositionChange: CoverPositionChange;
   uploadImage: (file?: File) => Promise<string | null>;
 }) {
   const [urlDraft, setUrlDraft] = useState("");
@@ -105,7 +104,13 @@ function GalleryImagesField({ images, inputId, uploading, positionX, positionY, 
   const normalized = normalizeMediaImages(images);
   const coverSrc = mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]);
   const busy = uploading || batchUploading;
-  const commit = (next: MediaImage[]) => onChange(normalizeMediaImages(next.map((image, index) => ({ ...image, sortOrder: index }))));
+  const commit = (next: MediaImage[]) => {
+    const ordered = normalizeMediaImages(next.map((image, index) => ({ ...image, sortOrder: index })));
+    onChange(ordered);
+    if (mediaImageUrl(ordered.find((image) => image.isCover)) !== coverSrc) {
+      onPositionChange(defaultCoverFraming.coverPositionX, defaultCoverFraming.coverPositionY, defaultCoverFraming.coverZoom, defaultCoverFraming.coverOffsetX, defaultCoverFraming.coverOffsetY);
+    }
+  };
   const appendUrls = (urls: string[]) => {
     const available = Math.max(0, MAX_GALLERY_IMAGES - normalized.length);
     const next = [...normalized, ...urls.filter(Boolean).slice(0, available).map((url, index) => ({ url, thumbnail: url, sortOrder: normalized.length + index, isCover: normalized.length === 0 && index === 0 }))];
@@ -143,7 +148,7 @@ function GalleryImagesField({ images, inputId, uploading, positionX, positionY, 
     <div className="gallery-images-heading"><div><b id={`${inputId}-label`}>画廊图片</b><small>仅保存压缩缩略图，最多 {MAX_GALLERY_IMAGES} 张</small></div><span>{normalized.length} 张</span></div>
     <span className="file-picker gallery-file-picker"><input id={inputId} className="file-picker-input" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void uploadFiles(files); }} disabled={busy || normalized.length >= MAX_GALLERY_IMAGES} /><ActionButton type="button" className="file-picker-button" onClick={() => document.getElementById(inputId)?.click()} disabled={busy || normalized.length >= MAX_GALLERY_IMAGES}>{busy ? "上传中…" : "选择多张图片"}</ActionButton><small>{normalized.length >= MAX_GALLERY_IMAGES ? "已达到图片数量上限" : normalized.length ? `已加入 ${normalized.length} 张，可继续添加` : "可一次选择多张 JPG、PNG 或 WebP"}</small></span>
     {normalized.length > 0 ? <div className="gallery-image-editor">{normalized.map((image, index) => { const src = mediaImageUrl(image); return <article className={image.isCover ? "cover" : ""} key={`${image.id || "new"}:${src}`}><div className="gallery-image-preview"><img src={src} alt={`画廊图片 ${index + 1}`} loading="lazy" decoding="async" referrerPolicy="no-referrer" />{image.isCover && <span>封面</span>}</div><div className="gallery-image-controls"><button type="button" onClick={() => move(index, -1)} disabled={index === 0} aria-label={`将第 ${index + 1} 张前移`} title="前移">←</button><button type="button" onClick={() => move(index, 1)} disabled={index === normalized.length - 1} aria-label={`将第 ${index + 1} 张后移`} title="后移">→</button><button type="button" className="set-cover" onClick={() => setCover(index)} disabled={Boolean(image.isCover)}>{image.isCover ? "主图" : "设为主图"}</button><button type="button" className="remove" onClick={() => remove(index)} aria-label={`移除第 ${index + 1} 张图片`}>删除</button></div></article>; })}</div> : <p className="gallery-images-empty">还没有图片。上传多张图片后，第一张会作为条目封面。</p>}
-    {coverSrc && <CoverPositionEditor src={coverSrc} x={positionX} y={positionY} zoom={zoom} contain alt="画廊主图位置预览" onChange={onPositionChange} />}
+    {coverSrc && <CoverPositionEditor src={coverSrc} x={framing?.coverPositionX} y={framing?.coverPositionY} zoom={framing?.coverZoom} offsetX={framing?.coverOffsetX} offsetY={framing?.coverOffsetY} contain alt="画廊主图位置预览" onChange={onPositionChange} />}
     <div className="gallery-image-add-row"><input type="url" value={urlDraft} onChange={(event) => setUrlDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addUrl(); } }} placeholder="粘贴一张图片地址" aria-label="画廊图片地址" disabled={busy || normalized.length >= MAX_GALLERY_IMAGES} /><button type="button" onClick={addUrl} disabled={busy || !urlDraft.trim() || normalized.length >= MAX_GALLERY_IMAGES}>添加地址</button></div>
   </section>;
 }
@@ -191,15 +196,29 @@ function AddModal({ query, setQuery, search, searching, searchError = "", search
     catch (error) { setSaveError(error instanceof Error ? error.message : "保存失败，草稿已保留，请重试"); }
     finally { saveInFlight.current = false; setSaving(false); }
   };
+  const setCoverPosition: CoverPositionChange = (coverPositionX, coverPositionY, coverZoom, coverOffsetX, coverOffsetY) => {
+    setForm((current) => ({
+      ...current,
+      metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, coverZoom, coverOffsetX, coverOffsetY }),
+    }));
+  };
+  const setCoverImage = (image: string) => setForm((current) => ({
+    ...current, image, metadata: normalizeMediaMetadata({ ...current.metadata, ...defaultCoverFraming }),
+  }));
+  const uploadCoverImage = async (file?: File) => {
+    if (!file) return;
+    const url = await uploadImage(file);
+    if (url) setCoverImage(url);
+  };
   const setting = mediaSettings[form.mediaType];
   const canSearchRemote = ["anime", "game", "light_novel", "manga", "music", "movie", "tv"].includes(form.mediaType);
   const isMusic = form.mediaType === "music";
   const isVisual = form.mediaType === "visual";
   const isVideo = form.mediaType === "video";
   const isFilm = form.mediaType === "movie" || form.mediaType === "tv";
-  return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><fieldset ref={dialogRef} tabIndex={-1} disabled={saving} className="modal-card add-modal editor-dialog" role="dialog" aria-modal="true" aria-labelledby="add-title" aria-busy={saving}>
+  return <div className="overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><fieldset ref={dialogRef} tabIndex={-1} disabled={saving} className="modal-card add-modal editor-dialog" data-media-type={form.mediaType} role="dialog" aria-modal="true" aria-labelledby="add-title" aria-busy={saving}>
     <DialogHeading eyebrow="添加到月下集" title="新的收藏" id="add-title" onClose={requestClose} disabled={saving || thumbnailUploading} closeLabel="关闭" />
-    <div className="media-type-picker">{mediaMeta.filter(([id]) => id !== "all").map(([id, label, icon]) => <button key={id} className={form.mediaType === id ? "active" : ""} onClick={() => { const nextType = id as MediaType; const nextFilm = nextType === "movie" || nextType === "tv"; setForm({ ...form, mediaType: nextType, total: nextType === "game" ? 100 : nextType === "movie" || nextType === "music" || nextType === "video" ? 1 : form.total === 100 ? 12 : form.total, subjectId: undefined, image: "", thumbnail: "", images: [], globalScore: nextFilm ? form.globalScore : undefined, metadata: nextFilm || nextType === "video" ? form.metadata : normalizeMediaMetadata() }); setQuery(""); }}><i>{icon}</i>{label}</button>)}</div>
+    <div className="media-type-picker">{mediaMeta.filter(([id]) => id !== "all").map(([id, label, icon]) => <button key={id} className={form.mediaType === id ? "active" : ""} onClick={() => { const nextType = id as MediaType; const nextFilm = nextType === "movie" || nextType === "tv"; setForm({ ...form, mediaType: nextType, total: nextType === "game" ? 100 : nextType === "movie" || nextType === "music" || nextType === "video" ? 1 : form.total === 100 ? 12 : form.total, subjectId: undefined, image: "", thumbnail: "", images: [], globalScore: nextFilm ? form.globalScore : undefined, metadata: nextFilm || nextType === "video" ? normalizeMediaMetadata({ ...form.metadata, ...defaultCoverFraming }) : normalizeMediaMetadata() }); setQuery(""); }}><i>{icon}</i>{label}</button>)}</div>
     <div className="source-suggestion"><span>推荐数据源</span><b>{setting.sources}</b></div>
     {canSearchRemote && <><label>搜索 {isFilm ? "TMDB" : form.mediaType === "game" ? "Bangumi + VNDB" : form.mediaType === "manga" ? "Bangumi + AniList + MangaDex" : form.mediaType === "light_novel" ? "Bangumi + AniList + NDL + 图书目录" : "Bangumi"} 全库</label>
     <div className="add-search"><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); search(); } }} placeholder={isFilm ? "输入片名或关键词" : form.mediaType === "game" ? "输入 Bangumi ID、VNDB ID、作品名或关键词" : "输入 Bangumi ID、作品名或关键词"} /><button type="button" onClick={search}>搜索</button></div>
@@ -218,8 +237,8 @@ function AddModal({ query, setQuery, search, searching, searchError = "", search
        <label className="wide">所属合集<RoundedSelect value={form.collection} onChange={(value) => setForm({ ...form, collection: value })} options={[{ value: "", label: "不加入合集" }, ...collections.map((name) => ({ value: name, label: name }))]} ariaLabel="所属合集" /></label><label className="wide">标签<input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} placeholder="用逗号分隔，例如：热血，周更，想二刷" /></label>
       {isFilm && <><label>导演<input value={form.metadata.director} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, director: event.target.value } })} /></label><label>演员<input value={form.metadata.actors.join("，")} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, actors: event.target.value.split(/[,，、\s]+/).map((actor) => actor.trim()).filter(Boolean) } })} placeholder="用逗号分隔" /></label><label>年份<input type="number" min="1800" max="3000" value={form.metadata.year || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, year: Number(event.target.value) || undefined } })} /></label><label>地区<input value={form.metadata.region} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, region: event.target.value } })} /></label><label>季数<input type="number" min="1" max="100" value={form.metadata.seasons || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, seasons: Number(event.target.value) || undefined } })} /></label><label>集数<input type="number" min="1" max="10000" value={form.metadata.episodes || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, episodes: Number(event.target.value) || undefined } })} /></label></>}
       {isMusic && <><label>专辑<input value={form.musicAlbum} onChange={(event) => setForm({ ...form, musicAlbum: event.target.value })} placeholder="单曲所属专辑" /></label><label>歌手<input value={form.musicArtist} onChange={(event) => setForm({ ...form, musicArtist: event.target.value })} placeholder="演唱者" /></label><label>作词<input value={form.lyricist} onChange={(event) => setForm({ ...form, lyricist: event.target.value })} placeholder="作词人" /></label><label>作曲<input value={form.composer} onChange={(event) => setForm({ ...form, composer: event.target.value })} placeholder="作曲人" /></label><label>年份<input type="number" min="1800" max="3000" value={form.metadata.year || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, year: Number(event.target.value) || undefined } })} placeholder="发行年份" /></label><label className="wide">来源信息<input value={form.source} onChange={(event) => setForm({ ...form, source: event.target.value })} placeholder="例如：个人录入、实体唱片" /></label><label className="check-field"><input type="checkbox" checked={form.animeSong} onChange={(event) => setForm({ ...form, animeSong: event.target.checked })} />动漫歌曲</label></>}
-      {isVideo && <><CoverField value={form.image} label="封面图片" placeholder="粘贴封面图片地址" previewAlt="视频封面预览" inputId="add-video-cover-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} onChange={(value) => setForm((current) => ({ ...current, image: value }))} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onUpload={async (file) => { const url = await uploadImage(file); if (url) setForm((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) })); }} /><label>缩略图<input type="url" value={form.thumbnail} onChange={(event) => setForm({ ...form, thumbnail: event.target.value })} placeholder="粘贴缩略图地址（可选）" /></label><label>来源信息<input value={form.source} onChange={(event) => setForm({ ...form, source: event.target.value })} placeholder="例如：YouTube、个人收藏" /></label><label>来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="视频页面或原始来源链接" /></label><label>平台<input value={form.metadata.platform || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, platform: event.target.value } })} placeholder="例如：YouTube、Bilibili" /></label><label>创作者<input value={form.metadata.creator || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, creator: event.target.value } })} placeholder="作者或频道" /></label><label>时长<input value={form.metadata.duration || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, duration: event.target.value } })} placeholder="例如：03:42" /></label><label>视频子分类<div className="inline-field"><RoundedSelect value={form.videoSubtype} onChange={(value) => setForm({ ...form, videoSubtype: normalizeVideoSubtype(value) })} options={Object.entries(videoSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="视频子分类" /><button type="button" className="inline-manage-button" onClick={() => openVideoSubtypeManager("add")}>管理</button></div></label></>}
-      {isVisual ? <><GalleryImagesField images={normalizeMediaImages(form.images, form.thumbnail)} inputId="add-gallery-images-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} uploadImage={uploadImage} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onChange={(images) => setForm((current) => { const normalized = normalizeMediaImages(images); return { ...current, images: normalized, thumbnail: mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]) }; })} /><label>画廊子类型<div className="inline-field"><RoundedSelect value={form.visualSubtype} onChange={(value) => setForm({ ...form, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /><button type="button" className="inline-manage-button" onClick={() => openVisualSubtypeManager("add")}>管理</button></div></label><label>作者<input value={form.author} onChange={(event) => setForm({ ...form, author: event.target.value })} placeholder="作者名" /></label><label>Pixiv PID<input value={form.pixivPid} onChange={(event) => setForm({ ...form, pixivPid: event.target.value })} placeholder="可选" /></label><label>Twitter / X 来源<input value={form.twitterSource} onChange={(event) => setForm({ ...form, twitterSource: event.target.value })} placeholder="可选链接" /></label><label className="wide">来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="Pixiv、个人站点或其他来源" /></label></> : !isVideo && <CoverField value={form.image} label="封面图片" placeholder="搜索选择后会自动填入，也可粘贴图片地址" previewAlt="封面预览" inputId="add-media-cover-input" uploading={thumbnailUploading} positionX={form.metadata.coverPositionX} positionY={form.metadata.coverPositionY} zoom={form.metadata.coverZoom} onChange={(value) => setForm((current) => ({ ...current, image: value }))} onPositionChange={(coverPositionX, coverPositionY, coverZoom) => setForm((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }))} onUpload={async (file) => { const url = await uploadImage(file); if (url) setForm((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) })); }} />}
+      {isVideo && <><CoverField value={form.image} previewValue={form.image || form.thumbnail} label="封面图片" placeholder="粘贴封面图片地址" previewAlt="视频封面预览" inputId="add-video-cover-input" uploading={thumbnailUploading} framing={form.metadata} onChange={setCoverImage} onPositionChange={setCoverPosition} onUpload={uploadCoverImage} /><label>缩略图<input type="url" value={form.thumbnail} onChange={(event) => setForm({ ...form, thumbnail: event.target.value, metadata: form.image ? form.metadata : normalizeMediaMetadata({ ...form.metadata, ...defaultCoverFraming }) })} placeholder="粘贴缩略图地址（可选）" /></label><label>来源信息<input value={form.source} onChange={(event) => setForm({ ...form, source: event.target.value })} placeholder="例如：YouTube、个人收藏" /></label><label>来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="视频页面或原始来源链接" /></label><label>平台<input value={form.metadata.platform || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, platform: event.target.value } })} placeholder="例如：YouTube、Bilibili" /></label><label>创作者<input value={form.metadata.creator || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, creator: event.target.value } })} placeholder="作者或频道" /></label><label>时长<input value={form.metadata.duration || ""} onChange={(event) => setForm({ ...form, metadata: { ...form.metadata, duration: event.target.value } })} placeholder="例如：03:42" /></label><label>视频子分类<div className="inline-field"><RoundedSelect value={form.videoSubtype} onChange={(value) => setForm({ ...form, videoSubtype: normalizeVideoSubtype(value) })} options={Object.entries(videoSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="视频子分类" /><button type="button" className="inline-manage-button" onClick={() => openVideoSubtypeManager("add")}>管理</button></div></label></>}
+      {isVisual ? <><GalleryImagesField images={normalizeMediaImages(form.images, form.thumbnail)} inputId="add-gallery-images-input" uploading={thumbnailUploading} framing={form.metadata} uploadImage={uploadImage} onPositionChange={setCoverPosition} onChange={(images) => setForm((current) => { const normalized = normalizeMediaImages(images); return { ...current, images: normalized, thumbnail: mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]) }; })} /><label>画廊子类型<div className="inline-field"><RoundedSelect value={form.visualSubtype} onChange={(value) => setForm({ ...form, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /><button type="button" className="inline-manage-button" onClick={() => openVisualSubtypeManager("add")}>管理</button></div></label><label>作者<input value={form.author} onChange={(event) => setForm({ ...form, author: event.target.value })} placeholder="作者名" /></label><label>Pixiv PID<input value={form.pixivPid} onChange={(event) => setForm({ ...form, pixivPid: event.target.value })} placeholder="可选" /></label><label>Twitter / X 来源<input value={form.twitterSource} onChange={(event) => setForm({ ...form, twitterSource: event.target.value })} placeholder="可选链接" /></label><label className="wide">来源链接<input type="url" value={form.sourceUrl} onChange={(event) => setForm({ ...form, sourceUrl: event.target.value })} placeholder="Pixiv、个人站点或其他来源" /></label></> : !isVideo && <CoverField value={form.image} label="封面图片" placeholder="搜索选择后会自动填入，也可粘贴图片地址" previewAlt="封面预览" inputId="add-media-cover-input" uploading={thumbnailUploading} framing={form.metadata} onChange={setCoverImage} onPositionChange={setCoverPosition} onUpload={uploadCoverImage} />}
       <label className="wide">{isVideo ? "简介" : "备注"}<textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder={isVideo ? "视频描述" : "观看理由、角色或片段…"} /></label>
     </div>
     {saveError && <p className="detail-save-error" role="alert">{saveError}</p>}
@@ -415,7 +434,7 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
   const isVndb = draft.source === "vndb" || Boolean(draft.metadata?.vndbId);
   const supplementalProvider = primarySupplementalProvider(draft);
   const sourceSyncSettings = syncSettings[isVndb ? "vndb" : "bangumi"];
-  const cover = draft.image || (isVideo ? draft.thumbnail || "" : mediaType === "anime" && draft.subjectId && draft.source === "bangumi" ? highResCoverUrl(draft.jp || draft.title) : "");
+  const cover = draft.image || (isVideo || isMusic ? draft.thumbnail || "" : mediaType === "anime" && draft.subjectId && draft.source === "bangumi" ? highResCoverUrl(draft.jp || draft.title) : "");
   const galleryImages = normalizeMediaImages(draft.images, draft.thumbnail || "");
   const visualCover = mediaImageUrl(galleryImages.find((image) => image.isCover) || galleryImages[0]) || draft.thumbnail || "";
   const imageValue = isVisual ? visualCover : draft.image || "";
@@ -429,13 +448,16 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
     : draft.metadata?.overview || bangumi?.summary || "";
   const summaryPending = detailLoading && Boolean(detailSubjectId || detailVndbId || detailSupplementalId) && !summaryOverride && !draft.metadata?.overview;
   const previewTags = splitTags(tagText);
-  const setImageValue = (value: string) => setDraft((current) => ({ ...current, image: value }));
-  const setCoverPosition = (coverPositionX: number, coverPositionY: number, coverZoom?: number) => setDraft((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, ...(coverZoom === undefined ? {} : { coverZoom }) }) }));
+  const setImageValue = (image: string) => setDraft((current) => ({
+    ...current, image, metadata: normalizeMediaMetadata({ ...current.metadata, ...defaultCoverFraming }),
+  }));
+  const setCoverPosition: CoverPositionChange = (coverPositionX, coverPositionY, coverZoom, coverOffsetX, coverOffsetY) => setDraft((current) => ({
+    ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX, coverPositionY, coverZoom, coverOffsetX, coverOffsetY }),
+  }));
   const setGalleryImages = (images: MediaImage[]) => setDraft((current) => {
     const normalized = normalizeMediaImages(images);
     return { ...current, images: normalized, thumbnail: mediaImageUrl(normalized.find((image) => image.isCover) || normalized[0]) };
   });
-  const resetCoverPositionForNewImage = () => setDraft((current) => ({ ...current, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) }));
   const detachExternalMatch = (current: Anime): Anime => {
     const overviewIsManual = current.metadata?.overviewOverride === true;
     const sources = { ...(current.metadata?.sources || {}) };
@@ -515,7 +537,7 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
   const chooseImage = async (file?: File) => {
     if (!file) return;
     const url = await uploadImage(file);
-    if (url) setDraft((current) => ({ ...current, image: url, metadata: normalizeMediaMetadata({ ...current.metadata, coverPositionX: 50, coverPositionY: 50, coverZoom: 100 }) }));
+    if (url) setImageValue(url);
   };
   const submit = async () => {
     if (saveInFlight.current || imageUploading) return;
@@ -549,6 +571,7 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
           const metadata = normalizeMediaMetadata({
             ...draft.metadata,
             ...(detail.metadata || {}),
+            ...(detailImage !== (draft.image || "") ? defaultCoverFraming : {}),
             sources: { ...(draft.metadata?.sources || {}), ...(detail.metadata?.sources || {}), ...(changedSupplementalProvider ? { [changedSupplementalProvider]: detail.externalId || targetSupplementalId } : {}) },
             overview: sourceSyncSettings.overview ? detailOverview : draft.metadata?.overview || "",
             overviewOverride: sourceSyncSettings.overview ? false : draft.metadata?.overviewOverride,
@@ -599,9 +622,9 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
   };
   return <div className="overlay detail-overlay" onPointerDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><aside ref={dialogRef} tabIndex={-1} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title" aria-busy={saving}>
     <header><h2 id="detail-title">收藏详情</h2><button onClick={requestClose} disabled={saving || imageUploading} aria-label="关闭详情">×</button></header>
-    <fieldset className="detail-content editor-fields" disabled={saving}>
+    <fieldset className="detail-content editor-fields" data-media-type={mediaType} disabled={saving}>
       <section className="detail-hero">
-        <div className={isVisual ? "detail-gallery-cover" : "detail-cover-frame"}><CoverImage key={isVisual ? visualCover : cover} className={`detail-cover ${isVisual ? "gallery-detail-cover" : ""}`} src={isVisual ? visualCover : cover} alt={`${draft.title}封面`} placeholder={draft.title.slice(0, 2)} style={coverPositionStyle(draft.metadata?.coverPositionX, draft.metadata?.coverPositionY, draft.metadata?.coverZoom)} />{isVisual && galleryImages.length > 1 && <span>共 {galleryImages.length} 张</span>}</div>
+        <div className={isVisual ? "detail-gallery-cover" : "detail-cover-frame"}><CoverImage key={isVisual ? visualCover : cover} className={`detail-cover ${isVisual ? "gallery-detail-cover" : ""}`} src={isVisual ? visualCover : cover} alt={`${draft.title}封面`} placeholder={draft.title.slice(0, 2)} framing={draft.metadata || {}} fit={isVisual ? "contain" : "cover"} />{isVisual && galleryImages.length > 1 && <span className="gallery-cover-count">共 {galleryImages.length} 张</span>}</div>
         <div>{!isMusic && !isVisual && !isVideo && <span className="detail-status">{{ watching: "进行中", wish: "未开始", finished: "已完成", library: "搁置", dropped: "抛弃" }[draft.status]}</span>}<span className={`detail-media media-${mediaType}`}>{mediaMeta.find(([id]) => id === mediaType)?.[1]}</span><h3>{draft.title}</h3>{draft.jp && <p>{draft.jp}</p>}{draft.next && <div className="detail-next"><b>{draft.next}</b><small>更新提醒已开启</small></div>}</div>
       </section>
       <section className="detail-personal-rating"><div><b>个人评分</b><span>你的收藏优先显示这一项</span></div><Rating score={draft.score} onRate={(score) => setDraft({ ...draft, score })} /></section>
@@ -623,7 +646,7 @@ function DetailDrawer({ item, collections, close, save, remove, uploadImage, ima
         {isMusic && <><label>专辑<input value={draft.musicAlbum || ""} onChange={(event) => setDraft({ ...draft, musicAlbum: event.target.value })} /></label><label>歌手<input value={draft.musicArtist || ""} onChange={(event) => setDraft({ ...draft, musicArtist: event.target.value })} /></label><label>作词<input value={draft.lyricist || ""} onChange={(event) => setDraft({ ...draft, lyricist: event.target.value })} /></label><label>作曲<input value={draft.composer || ""} onChange={(event) => setDraft({ ...draft, composer: event.target.value })} /></label><label>年份<input type="number" min="1800" max="3000" value={draft.metadata?.year || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, year: Number(event.target.value) || undefined }) })} /></label><label className="wide">来源信息<input value={draft.source || ""} onChange={(event) => setDraft({ ...draft, source: event.target.value })} placeholder="例如：个人录入、实体唱片" /></label><label className="check-field"><input type="checkbox" checked={Boolean(draft.animeSong)} onChange={(event) => setDraft({ ...draft, animeSong: event.target.checked })} />动漫歌曲</label></>}
         {isVisual && <><label>画廊子类型<RoundedSelect value={draft.visualSubtype || "other"} onChange={(value) => setDraft({ ...draft, visualSubtype: normalizeVisualSubtype(value) })} options={Object.entries(visualSubtypeLabels || {}).map(([id, label]) => ({ value: id, label }))} ariaLabel="画廊子类型" /></label><label>作者<input value={draft.author || ""} onChange={(event) => setDraft({ ...draft, author: event.target.value })} /></label><label>Pixiv PID<input value={draft.pixivPid || ""} onChange={(event) => setDraft({ ...draft, pixivPid: event.target.value })} /></label><label>Twitter / X 来源<input value={draft.twitterSource || ""} onChange={(event) => setDraft({ ...draft, twitterSource: event.target.value })} /></label><label className="wide">来源链接<input type="url" value={draft.sourceUrl || ""} onChange={(event) => setDraft({ ...draft, sourceUrl: event.target.value })} /></label></>}
         {isVideo && <><label>平台<input value={draft.metadata?.platform || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, platform: event.target.value }) })} /></label><label>创作者<input value={draft.metadata?.creator || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, creator: event.target.value }) })} /></label><label>时长<input value={draft.metadata?.duration || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, duration: event.target.value }) })} placeholder="例如：03:42" /></label><label>视频子分类<RoundedSelect value={draft.videoSubtype || "other"} onChange={(value) => setDraft({ ...draft, videoSubtype: normalizeVideoSubtype(value) })} options={Object.entries(videoSubtypeLabels || {}).map(([id, label]) => ({ value: id, label: String(label) }))} ariaLabel="视频子分类" /></label><label>来源信息<input value={draft.metadata?.videoSource || ""} onChange={(event) => setDraft({ ...draft, metadata: normalizeMediaMetadata({ ...draft.metadata, videoSource: event.target.value }) })} /></label><label>来源链接<input type="url" value={draft.sourceUrl || ""} onChange={(event) => setDraft({ ...draft, sourceUrl: event.target.value })} /></label></>}
-        {isVisual ? <GalleryImagesField images={galleryImages} inputId="detail-gallery-images-input" uploading={imageUploading} positionX={draft.metadata?.coverPositionX} positionY={draft.metadata?.coverPositionY} zoom={draft.metadata?.coverZoom} uploadImage={uploadImage} onChange={setGalleryImages} onPositionChange={setCoverPosition} /> : <><CoverField value={imageValue} previewValue={cover} label="封面图片" placeholder="粘贴图片地址" previewAlt="封面预览" inputId="detail-image-input" uploading={imageUploading} positionX={draft.metadata?.coverPositionX} positionY={draft.metadata?.coverPositionY} zoom={draft.metadata?.coverZoom} onChange={(value) => { setImageValue(value); resetCoverPositionForNewImage(); }} onUpload={chooseImage} onPositionChange={setCoverPosition} />{isVideo && <label className="wide">缩略图<input type="url" value={draft.thumbnail || ""} onChange={(event) => setDraft({ ...draft, thumbnail: event.target.value })} placeholder="粘贴缩略图地址（可选）" /></label>}</>}
+        {isVisual ? <GalleryImagesField images={galleryImages} inputId="detail-gallery-images-input" uploading={imageUploading} framing={draft.metadata} uploadImage={uploadImage} onChange={setGalleryImages} onPositionChange={setCoverPosition} /> : <><CoverField value={imageValue} previewValue={cover} label="封面图片" placeholder="粘贴图片地址" previewAlt="封面预览" inputId="detail-image-input" uploading={imageUploading} framing={draft.metadata} onChange={setImageValue} onUpload={chooseImage} onPositionChange={setCoverPosition} />{isVideo && <label className="wide">缩略图<input type="url" value={draft.thumbnail || ""} onChange={(event) => setDraft({ ...draft, thumbnail: event.target.value, metadata: draft.image ? draft.metadata : normalizeMediaMetadata({ ...draft.metadata, ...defaultCoverFraming }) })} placeholder="粘贴缩略图地址（可选）" /></label>}</>}
         {!isVisual && !isVideo && <label>{isFilm ? "TMDB 评分" : isVndb ? "VNDB 评分" : hasExternalMatch ? "Bangumi 评分" : "外部评分"}<input type="number" min="0" max="10" step="0.1" value={draft.globalScore || ""} onChange={(event) => setDraft({ ...draft, globalScore: Number(event.target.value) || undefined })} placeholder="0 - 10" /></label>}
         <label>所属合集<RoundedSelect value={draft.collection || ""} onChange={(value) => setDraft({ ...draft, collection: value })} options={[{ value: "", label: "不加入合集" }, ...collections.map((name) => ({ value: name, label: name }))]} ariaLabel="所属合集" /></label>
         <label className="wide">标签<input value={tagText} onChange={(event) => setTagText(event.target.value)} placeholder="用逗号分隔，例如：热血，周更，想二刷" />{previewTags.length > 0 && <span className="tag-editor-preview">{previewTags.map((tag) => <em key={tag}>#{tag}</em>)}</span>}</label>

@@ -190,6 +190,13 @@
       "when": 1792740920286,
       "tag": "0026_agent_operation_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1795133774826,
+      "tag": "0027_cover_offsets",
+      "breakpoints": true
     }
   ]
 }

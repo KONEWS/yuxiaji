@@ -5,6 +5,7 @@ import { ClientApiError, customBackgroundUrl, fetchSubjectDetail, highResCoverUr
 import { defaultDeviceCategoryLabels, defaultDeviceSubCategories, defaultSyncSettings, defaultTagPreferences, defaultVideoSubtypeLabels, defaultVisualSubtypeLabels, deviceCategoriesForPreferences, isCollectionMediaType, normalizeDeviceCategoryLabels, normalizeDeviceSubCategories, normalizeMediaMetadata, normalizeMediaType, normalizeSyncSettings, normalizeTagPreferences, normalizeVideoSubtype, normalizeVideoSubtypeLabels, normalizeVisualSubtype, normalizeVisualSubtypeLabels, tagDisplayName, type DeviceCategoryId, type DeviceCategoryLabels, type DeviceSubCategoryMap, type SyncField, type SyncProvider, type SyncSettings, type TagPreferences, type VideoSubtypeLabels, type VisualSubtypeLabels } from "./lib/constants";
 import { CollectionSummary } from "./components/tracker/collection-summary";
 import { DeviceLibrary, normalizeDevice as normalizeLibraryDevice } from "./components/tracker/device-library";
+import { defaultCoverFraming } from "./lib/cover-framing";
 import { MediaLibrary } from "./components/tracker/media-library";
 import { DeviceModal, DeviceSubCategoryModal, ReceiptModal, AddModal, CalendarModal, CollectionManagerModal, CollectionModal, CompletionModal, DetailDrawer, VideoSubtypeModal, VisualSubtypeModal, ConnectivityModal, SettingsModal, SyncMenu, SyncModal } from "./components/tracker/lazy-dialogs";
 import { LazyPanel } from "./components/tracker/lazy-panel";
@@ -954,8 +955,9 @@ export default function Home() {
       price: device.price != null ? String(device.price) : "", purchaseDate: device.purchaseDate || "",
       receiptImage: device.receiptImage, coverImage: device.coverImage, tags: device.tags.join("，"),
       coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom,
+      coverOffsetX: device.coverOffsetX, coverOffsetY: device.coverOffsetY,
       rating: device.rating != null ? String(device.rating) : "", review: device.review,
-    } : { name: "", category: deviceCategories[0]?.id || "audio", subCategory: "", status: "active", price: "", purchaseDate: "", receiptImage: "", coverImage: "", coverPositionX: 50, coverPositionY: 50, coverZoom: 100, tags: "", rating: "", review: "" });
+    } : { name: "", category: deviceCategories[0]?.id || "audio", subCategory: "", status: "active", price: "", purchaseDate: "", receiptImage: "", coverImage: "", ...defaultCoverFraming, tags: "", rating: "", review: "" });
     setModal("device");
   };
   const openDeviceCategoryManager = () => {
@@ -980,13 +982,20 @@ export default function Home() {
       coverPositionX: deviceForm.coverPositionX,
       coverPositionY: deviceForm.coverPositionY,
       coverZoom: deviceForm.coverZoom,
+      coverOffsetX: deviceForm.coverOffsetX,
+      coverOffsetY: deviceForm.coverOffsetY,
       tags: deviceForm.tags.split(/[,，、\s]+/).map((tag) => tag.trim()).filter(Boolean).slice(0, 12),
       rating: deviceForm.rating !== "" && Number.isInteger(Number(deviceForm.rating)) ? Math.min(10, Math.max(1, Number(deviceForm.rating))) : null,
       review: deviceForm.review.trim(),
       updatedAt: Date.now(),
     };
     const isNew = !deviceDraft;
-    const requested: DevicePayload = { id: deviceDraft?.id, name: device.name, category: device.category, subCategory: device.subCategory, status: device.status, price: device.price, currency: device.currency, purchaseDate: device.purchaseDate, receiptImage: device.receiptImage, coverImage: device.coverImage, coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom, tags: device.tags, rating: device.rating, review: device.review };
+    const requested: DevicePayload = {
+      id: deviceDraft?.id, name: device.name, category: device.category, subCategory: device.subCategory, status: device.status,
+      price: device.price, currency: device.currency, purchaseDate: device.purchaseDate, receiptImage: device.receiptImage, coverImage: device.coverImage,
+      coverPositionX: device.coverPositionX, coverPositionY: device.coverPositionY, coverZoom: device.coverZoom,
+      coverOffsetX: device.coverOffsetX, coverOffsetY: device.coverOffsetY, tags: device.tags, rating: device.rating, review: device.review,
+    };
     const saved = normalizeLibraryDevice(await deviceDraftWriter.current.save(requested, saveDevice));
     setDevices((items) => items.some((item) => item.id === saved.id) ? items.map((item) => item.id === saved.id ? saved : item) : [saved, ...items]);
     closeSecondary();

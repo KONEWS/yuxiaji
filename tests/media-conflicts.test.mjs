@@ -125,6 +125,23 @@ test("opening a detail reads only the requested owned record", async () => {
   assert.equal((await api("GET", undefined, "/api/media?id=invalid")).status, 400);
 });
 
+test("browser cover adjustments persist on media and devices and survive an unrelated edit", async () => {
+  const framing = { coverZoom: 25, coverPositionX: 50, coverPositionY: 50, coverOffsetX: -17.53, coverOffsetY: 50 };
+  const media = await create({ metadata: framing });
+  await api("POST", { id: media.id, expectedRevision: media.revision, note: "Updated note" });
+  const reread = await read(media.id);
+  for (const [key, value] of Object.entries(framing)) assert.equal(reread.metadata[key], value, key);
+
+  const deviceFraming = { ...framing, coverZoom: 500, coverOffsetY: 4.25 };
+  const created = await api("POST", { name: "Framed device", ...deviceFraming }, "/api/devices");
+  assert.equal(created.status, 200);
+  const id = created.body.device.id;
+  const edit = await api("POST", { id, name: "New device name" }, "/api/devices");
+  assert.equal(edit.status, 200);
+  const saved = (await api("GET", undefined, "/api/devices")).body.devices.find((device) => device.id === id);
+  for (const [key, value] of Object.entries(deviceFraming)) assert.equal(saved[key], value, key);
+});
+
 test("same-timestamp server edits invalidate old browser updates without overwriting them", async () => {
   const original = await create({ title: "Server update", note: "old" });
   await sql([`UPDATE user_subjects SET note='Agent note' WHERE id=${original.id} AND user_key='${owner}'`]);

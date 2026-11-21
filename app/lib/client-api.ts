@@ -320,6 +320,8 @@ export type DevicePayload = {
   coverPositionX?: number;
   coverPositionY?: number;
   coverZoom?: number;
+  coverOffsetX?: number;
+  coverOffsetY?: number;
   tags: string[];
   rating?: number | null;
   review?: string;

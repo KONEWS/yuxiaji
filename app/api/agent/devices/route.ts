@@ -36,6 +36,8 @@ async function writeDevice(request: Request, identity: AgentIdentity, action: "c
         coverPositionX: body.coverPositionX === undefined ? existing.coverPositionX : next.coverPositionX,
         coverPositionY: body.coverPositionY === undefined ? existing.coverPositionY : next.coverPositionY,
         coverZoom: body.coverZoom === undefined ? existing.coverZoom : next.coverZoom,
+        coverOffsetX: body.coverOffsetX === undefined ? existing.coverOffsetX : next.coverOffsetX,
+        coverOffsetY: body.coverOffsetY === undefined ? existing.coverOffsetY : next.coverOffsetY,
       };
       await db.update(userDevices).set(update).where(and(eq(userDevices.id, id), eq(userDevices.userKey, identity.userKey)));
       row = { ...existing, ...update, id };

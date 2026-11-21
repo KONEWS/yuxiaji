@@ -171,6 +171,8 @@ export const userDevices = sqliteTable(
     coverPositionX: integer("cover_position_x").notNull().default(50),
     coverPositionY: integer("cover_position_y").notNull().default(50),
     coverZoom: integer("cover_zoom").notNull().default(100),
+    coverOffsetX: real("cover_offset_x").notNull().default(0),
+    coverOffsetY: real("cover_offset_y").notNull().default(0),
     tags: text("tags").notNull().default("[]"),
     rating: integer("rating"),
     review: text("review").notNull().default(""),
