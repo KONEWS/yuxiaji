@@ -15,15 +15,13 @@ const requiredColumns = {
   mcp_oauth_codes: ["code_hash", "grant_id", "client_id", "redirect_uri", "resource", "code_challenge", "scopes_json", "expires_at", "consumed_at"],
   mcp_oauth_tokens: ["token_hash", "grant_id", "client_id", "resource", "token_type", "scopes_json", "created_at", "expires_at", "used_at"],
 };
-const sql = Object.keys(requiredColumns).map((table) => `SELECT '${table}' AS table_name, name FROM pragma_table_info('${table}')`).join(" UNION ALL ");
-const { stdout } = await promisify(execFile)(process.execPath, [resolve("node_modules/wrangler/bin/wrangler.js"),
-  "d1", "execute", "yuexiaji-db", "--remote", "--config", "wrangler.jsonc", "--command", sql, "--json"],
-{ maxBuffer: 1024 * 1024, timeout: 60000 });
-const queries = JSON.parse(stdout);
-assert.ok(Array.isArray(queries) && queries.every((query) => query.success), "Remote D1 schema query succeeds");
-const rows = queries.flatMap((query) => query.results || []);
 for (const [table, names] of Object.entries(requiredColumns)) {
-  const actual = new Set(rows.filter((row) => row.table_name === table).map((row) => row.name));
+  const { stdout } = await promisify(execFile)(process.execPath, [resolve("node_modules/wrangler/bin/wrangler.js"),
+    "d1", "execute", "yuexiaji-db", "--remote", "--config", "wrangler.jsonc", "--command", `PRAGMA table_info('${table}')`, "--json"],
+  { maxBuffer: 1024 * 1024, timeout: 60000 });
+  const [query] = JSON.parse(stdout);
+  assert.ok(query?.success, `Remote D1 schema query succeeds for ${table}`);
+  const actual = new Set(query.results.map((row) => row.name));
   for (const name of names) assert.ok(actual.has(name), `${table}.${name} exists in the production database`);
 }
 console.log("Verified production device cover offsets, all four OAuth tables and Agent operation recovery fields");
