@@ -263,3 +263,7 @@ npx wrangler deploy --config wrangler.jsonc
 - 音乐使用独立唱片卡片、方形封面、歌手/专辑层级与评分；音乐页全宽展示，不插入番剧日历。保留歌曲列表及已有布局偏好；新默认网格，手机双列。样式放在 app/music.css，沿用月华颜色和控件 token。
 - frontend-performance.test.ts 覆盖缓存合并/故障隔离及分页边界；上传体积测试改用节流的本地 HTTP 传输，仍严格验证 401/413，避免早期拒绝时本地代理产生 ECONNRESET。
 - 使用纯本地虚构 200 条媒体、75 条藏品验收桌面/手机布局、分页、搜索复位、跨页全选、懒加载详情、评分及搜索取消；未为测试修改生产收藏。发布结果以本提交的 GitHub Actions 为准。
+
+## 2026-11-24 备份完善
+
+当前备份代码地图与使用边界见 [BACKUPS.md](BACKUPS.md)。新增 `site-backup-data.ts` 的白名单数据快照、事务恢复与并发检查；`backup-archive.ts` 的私有 R2 历史、图片校验、有限重试与保留策略；`backup-zip.ts` 的流式 ZIP 和浏览器离线验包。`worker/index.ts` 增加 scheduled，根配置每五分钟唤醒，业务规则每天北京时间 04:00 生成一份。未迁移表结构。头像/背景改为不可变版本对象并保留旧路径兼容。备份接口保持浏览器 Session/CSRF，不授予内容插件或 Agent 额外备份权限。

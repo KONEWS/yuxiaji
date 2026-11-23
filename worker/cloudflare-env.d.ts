@@ -10,23 +10,50 @@ interface D1PreparedStatement {
   raw<T = unknown>(): Promise<T>;
 }
 
+interface D1Result<T = Record<string, unknown>> {
+  success: boolean;
+  results: T[];
+  meta: Record<string, unknown>;
+  error?: string;
+}
+
 interface D1Database {
   prepare(query: string): D1PreparedStatement;
   dump(): Promise<ArrayBuffer>;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<T[]>;
+  batch<T = Record<string, unknown>>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
   exec<T = unknown>(query: string): Promise<T>;
 }
 
 interface R2Object {
   body: ReadableStream;
   httpEtag: string;
+  etag: string;
+  key: string;
+  size: number;
+  uploaded: Date;
+  httpMetadata?: { contentType?: string };
+  customMetadata?: Record<string, string>;
+  arrayBuffer(): Promise<ArrayBuffer>;
+  text(): Promise<string>;
+  json<T = unknown>(): Promise<T>;
   writeHttpMetadata(headers: Headers): void;
 }
 
 interface R2Bucket {
-  head(key: string): Promise<{ size: number } | null>;
-  get(key: string): Promise<R2Object | null>;
-  put(key: string, value: ReadableStream | ArrayBuffer | string | Blob, options?: { httpMetadata?: { contentType?: string } }): Promise<void>;
+  head(key: string): Promise<Omit<R2Object, "body" | "arrayBuffer" | "text" | "json"> | null>;
+  get(key: string, options?: { onlyIf?: { etagMatches?: string } }): Promise<R2Object | null>;
+  put(key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob, options?: {
+    httpMetadata?: { contentType?: string };
+    customMetadata?: Record<string, string>;
+    onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string };
+    sha256?: string | ArrayBuffer;
+  }): Promise<R2Object | null>;
+  delete(key: string | string[]): Promise<void>;
+  list(options?: { prefix?: string; cursor?: string; limit?: number; include?: ("customMetadata" | "httpMetadata")[] }): Promise<{
+    objects: Array<Omit<R2Object, "body" | "arrayBuffer" | "text" | "json">>;
+    truncated: boolean;
+    cursor?: string;
+  }>;
 }
 
 interface ImagesBinding {
