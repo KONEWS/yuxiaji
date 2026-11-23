@@ -45,11 +45,14 @@ export async function POST(request: Request) {
     // Validate before the transaction; never discard a malformed attachment
     // after its old associations have already been removed.
     const prepared = backup.subjects.map((subject) => {
-      const images = sanitizeGalleryImages(subject.images) ?? [];
-      if (images.length !== subject.images.length) throw new CollectionBackupError(`《${subject.title}》的画廊图片存在重复或无效项`);
+      const sanitizedImages = sanitizeGalleryImages(subject.images) ?? [];
+      if (sanitizedImages.length !== subject.images.length) throw new CollectionBackupError(`《${subject.title}》的画廊图片存在重复或无效项`);
+      // The backup parser already checked every source line. Preserve its raw
+      // text instead of applying the ordinary form input's whitespace cleanup.
+      const images = sanitizedImages.map((image, index) => ({ ...image, sourceUrl: subject.images[index].sourceUrl }));
       const links = subject.storageLinks.map((link) => sanitizeMediaStorageLink({ ...link, verifiedAt: link.verifiedAtMs }));
       if (links.filter((link) => link.isPrimary).length > 1) throw new CollectionBackupError(`《${subject.title}》存在多个主存储关联`);
-      return { subject: sanitizeSubject(toBrowserBody(subject)), images, links };
+      return { subject: { ...sanitizeSubject(toBrowserBody(subject)), sourceUrl: subject.sourceUrl }, images, links };
     });
 
     const db = getDb();

@@ -168,12 +168,23 @@ beforeEach(async () => {
 });
 
 test("complete archives stream portable ZIPs and restore database, media, devices, avatar and background after original loss", async () => {
+  const sourceOnlyImage = {
+    url: "/api/media-assets?v=1700000004000", key: `media-assets/${ownerHash}/gallery/1700000004000`, bytes: images[1],
+  };
+  sources.push(sourceOnlyImage);
+  await putObject(sourceOnlyImage.key, sourceOnlyImage.bytes);
+  const externalSource = "https://example.com/reference?original=1#unchanged";
+  const multilineSource = `  ${sourceOnlyImage.url}  \r\n ${externalSource}   `;
+  // This object is referenced only inside the multiline source field, so it
+  // cannot accidentally enter the archive through a normal image column.
+  await sql([{ sql: "UPDATE user_subjects SET source_url=? WHERE user_key=? AND id=10", params: [multilineSource, owner] }]);
   const before = await data();
   const backup = await createComplete();
   assert.equal(backup.status, "complete");
-  assert.equal(backup.assetCount, 14);
+  assert.equal(backup.assetCount, 15);
   const downloaded = await download(backup.id);
-  assert.equal(downloaded.manifest.assets.length, 14);
+  assert.equal(downloaded.manifest.assets.length, 15);
+  assert.ok(downloaded.manifest.assets.some((asset) => asset.urls.includes(sourceOnlyImage.url)), "the local URL inside a multiline source must be archived");
   assert.equal(downloaded.entries.length, 4, "content-addressed identical PNGs should only be stored once in ZIP");
   assert.deepEqual(downloaded.manifest.data.tables, before.data.tables);
   const damagedZip = new Uint8Array(await downloaded.file.arrayBuffer());
@@ -192,7 +203,12 @@ test("complete archives stream portable ZIPs and restore database, media, device
   assert.ok(restored.continuations > 0, "more than eight images must use resumable restoration");
   const after = await data();
   assert.deepEqual(after.data.counts, before.data.counts);
-  assert.equal(after.data.tables.user_subjects.find((row) => row.id === 10).note, "原始简介");
+  const restoredSubject = after.data.tables.user_subjects.find((row) => row.id === 10);
+  assert.equal(restoredSubject.note, "原始简介");
+  const restoredSourceImage = restoredSubject.source_url.split("\r\n")[0].trim();
+  assert.notEqual(restoredSourceImage, sourceOnlyImage.url);
+  assert.equal(restoredSubject.source_url, multilineSource.replace(sourceOnlyImage.url, restoredSourceImage),
+    "only the local URL may change; CRLF, surrounding spaces and the external URL must remain byte-for-byte unchanged");
   assert.equal(after.data.tables.user_devices[0].cover_offset_x, 12.5);
   assert.equal(new Set(after.data.tables.user_subject_images.map((row) => row.thumbnail)).size, 10,
     "different original image URLs must remain distinct even when their bytes have the same SHA-256");
@@ -207,12 +223,14 @@ test("complete archives stream portable ZIPs and restore database, media, device
     [device.cover_image, sources[10]], [device.receipt_image, sources[11]],
     [settings.avatar_image, sources[12]], [`/api/background?v=${settings.background_version}`, sources[13]],
     [JSON.parse(after.data.tables.user_subjects.find((row) => row.id === 10).metadata).backdropImage, sources[1]],
+    [restoredSourceImage, sourceOnlyImage],
   ]) {
     const response = await request(url);
     assert.equal(response.status, 200, url);
     assert.equal(sha256(Buffer.from(await response.arrayBuffer())), sha256(source.bytes));
   }
   assert.equal((await request(sources[0].url)).status, 404, "restore should use new image references without overwriting missing originals");
+  assert.equal((await request(sourceOnlyImage.url)).status, 404);
   const replay = await api("/api/backup/archive", restored.parameters);
   assert.equal(replay.status, 200, JSON.stringify(replay.body));
   assert.equal((await data()).fingerprint, after.fingerprint);
@@ -303,6 +321,28 @@ test("daily cron completes one snapshot per China date and respects persisted se
   assert.equal(current.settings.retentionDays, 7);
   assert.equal(current.backups.length, 2);
   assert.ok(current.backups.every((item) => item.status === "complete"));
+});
+
+test("cron exposes an original snapshot-read failure before any record exists and clears it after a successful same-day retry", async () => {
+  const now = "2026-11-24T20:05:00.000Z";
+  const failed = await api("/__test/cron", { now, failBatch: true });
+  assert.equal(failed.status, 500, JSON.stringify(failed.body));
+  assert.equal(failed.body.sameError, true, "the original D1 error must be rethrown without replacement");
+  assert.equal(failed.body.error, "injected D1 snapshot batch failure");
+  const afterFailure = await list();
+  assert.equal(afterFailure.backups.length, 0, "a failed read cannot create a complete or partial snapshot record");
+  assert.match(afterFailure.lastError, /injected D1 snapshot batch failure/);
+
+  const retried = await api("/__test/cron", { now });
+  assert.equal(retried.status, 200, JSON.stringify(retried.body));
+  const afterRetry = await list();
+  assert.equal(afterRetry.lastError, null);
+  assert.equal(afterRetry.backups.length, 1);
+  const backup = afterRetry.backups[0];
+  assert.equal(backup.id, "daily-2026-11-25");
+  assert.equal(backup.status, "complete");
+  assert.equal(backup.assetCount, 14);
+  assert.deepEqual((await download(backup.id)).manifest.data.tables, (await data()).data.tables);
 });
 
 test("401 unique images download as two complete-manifest ZIP parts with bounded R2 reads", async () => {

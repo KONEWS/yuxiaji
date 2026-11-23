@@ -100,6 +100,10 @@ export async function getBackupSettings(bucket: R2Bucket, user: string): Promise
   const value = await readJson<BackupSettings>(bucket, await root(user) + "settings.json");
   return { ...defaults, ...(value ? { enabled: value.enabled === true, retentionDays: [7, 14, 30].includes(value.retentionDays) ? value.retentionDays : 14 } : {}) };
 }
+export async function getLastScheduledBackupError(bucket: R2Bucket, user: string): Promise<string | null> {
+  const value = await readJson<{ error: string | null }>(bucket, await root(user) + "last-error.json");
+  return typeof value?.error === "string" ? value.error : null;
+}
 export async function configureBackup(bucket: R2Bucket, user: string, enabled: unknown, retentionDays: unknown) {
   if (typeof enabled !== "boolean" || ![7, 14, 30].includes(Number(retentionDays))) throw new SiteBackupError("备份开关或保留天数无效");
   const settings = { ...defaults, enabled, retentionDays: Number(retentionDays) };
@@ -138,8 +142,8 @@ async function collectSources(data: SiteBackup, user: string) {
   function visit(value: unknown, depth = 0) {
     if (depth > 35) return;
     if (typeof value === "string") {
-      if (value.startsWith("/api/")) urls.add(value);
-      else if (value.startsWith("{") || value.startsWith("[")) { try { visit(JSON.parse(value), depth + 1); } catch { /* Ordinary text. */ } }
+      for (const line of value.split(/\r\n|\r|\n/)) if (line.trim().startsWith("/api/")) urls.add(line.trim());
+      if (value.startsWith("{") || value.startsWith("[")) { try { visit(JSON.parse(value), depth + 1); } catch { /* Ordinary text. */ } }
     } else if (Array.isArray(value)) value.forEach((v) => visit(v, depth + 1));
     else if (value && typeof value === "object") Object.values(value).forEach((v) => visit(v, depth + 1));
   }
@@ -320,7 +324,12 @@ function rewriteUrls(data: SiteBackup, urls: Record<string, string>, backgroundV
     if (typeof value === "string") {
       if (Object.hasOwn(urls, value)) return urls[value];
       if (value.startsWith("{") || value.startsWith("[")) { try { const parsed = JSON.parse(value); const next = visit(parsed); const serialized = JSON.stringify(next); return JSON.stringify(parsed) === serialized ? value : serialized; } catch { return value; } }
-      return value;
+      return value.split(/(\r\n|\r|\n)/).map((part) => {
+        const trimmed = part.trim();
+        if (!trimmed || !Object.hasOwn(urls, trimmed)) return part;
+        const start = part.indexOf(trimmed);
+        return part.slice(0, start) + urls[trimmed] + part.slice(start + trimmed.length);
+      }).join("");
     }
     if (Array.isArray(value)) return value.map(visit);
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
@@ -438,31 +447,53 @@ export async function runScheduledBackup(env: BackupEnv, now = new Date()) {
   if (["0", "false", "off"].includes(String(env.BACKUP_COMPONENT_ENABLED).toLowerCase())) return;
   await withBackupLock(env.BUCKET, user, async (assertBackupLease) => {
     env = { ...env, assertBackupLease };
-    const settings = await getBackupSettings(env.BUCKET, user);
-    const records = await listBackupArchives(env.BUCKET, user);
-    let pending = records.find((item) => item.status === "pending" && item.kind !== "uploaded");
-    const chinaTime = new Date(now.getTime() + 8 * 3600000);
-    const date = chinaTime.toISOString().slice(0, 10);
-    const id = "daily-" + date;
-    if (!pending && settings.enabled) {
-      const failed = records.find((item) => item.id === id && item.status === "failed");
-      if (failed && ((await readRecord(env.BUCKET, user, failed.id)).failureCount || 0) < 3) pending = failed;
-    }
-    // Bootstrap a first real backup without waiting until the next day.
-    if (settings.enabled && !pending && !records.some((item) => item.id === id) && (chinaTime.getUTCHours() >= 4 || !records.some((item) => item.kind === "scheduled"))) pending = await createBackupArchive(env, user, "scheduled", id);
-    if (pending && pending.status !== "complete") {
-      const result = await advanceBackupArchive(env, user, pending.id, 60);
-      if (result.status === "failed") throw new Error(result.error || "自动备份失败");
-      if (result.status !== "complete") return;
-      pending = result;
-    }
-    if (pending?.status === "complete" || records.some((item) => item.id === id && item.status === "complete")) {
-      const maintenanceKey = await root(user) + "maintenance.json";
-      const maintenance = await readJson<{ lastPrunedDay: string }>(env.BUCKET, maintenanceKey);
-      if (maintenance?.lastPrunedDay !== date) {
-        await pruneArchives(env, user, settings.retentionDays);
-        await env.BUCKET.put(maintenanceKey, JSON.stringify({ lastPrunedDay: date }), { httpMetadata: JSON_HEADERS });
-      }
+    const errorKey = await root(user) + "last-error.json";
+    const lastError = await readJson<{ _etag?: string; error: string | null }>(env.BUCKET, errorKey);
+    const reportError = async (error: string | null) => {
+      if (error === (lastError?.error ?? null)) return;
+      try {
+        await assertBackupLease();
+        await env.BUCKET.put(errorKey, JSON.stringify({ checkedAt: now.toISOString(), error }), {
+          httpMetadata: JSON_HEADERS,
+          onlyIf: lastError?._etag ? { etagMatches: lastError._etag } : { etagDoesNotMatch: "*" },
+        });
+      } catch { /* Error reporting must preserve the actual backup outcome. */ }
+    };
+    try {
+      await runScheduledBackupWithLease(env, user, now);
+      await reportError(null);
+    } catch (error) {
+      // Snapshot validation can fail before a history record exists.
+      await reportError(error instanceof Error ? error.message.slice(0, 1000) : "自动备份失败");
+      throw error;
     }
   });
+}
+async function runScheduledBackupWithLease(env: BackupEnv, user: string, now: Date) {
+  const settings = await getBackupSettings(env.BUCKET, user);
+  const records = await listBackupArchives(env.BUCKET, user);
+  let pending = records.find((item) => item.status === "pending" && item.kind !== "uploaded");
+  const chinaTime = new Date(now.getTime() + 8 * 3600000);
+  const date = chinaTime.toISOString().slice(0, 10);
+  const id = "daily-" + date;
+  if (!pending && settings.enabled) {
+    const failed = records.find((item) => item.id === id && item.status === "failed");
+    if (failed && ((await readRecord(env.BUCKET, user, failed.id)).failureCount || 0) < 3) pending = failed;
+  }
+  // Bootstrap a first real backup without waiting until the next day.
+  if (settings.enabled && !pending && !records.some((item) => item.id === id) && (chinaTime.getUTCHours() >= 4 || !records.some((item) => item.kind === "scheduled"))) pending = await createBackupArchive(env, user, "scheduled", id);
+  if (pending && pending.status !== "complete") {
+    const result = await advanceBackupArchive(env, user, pending.id, 60);
+    if (result.status === "failed") throw new Error(result.error || "自动备份失败");
+    if (result.status !== "complete") return;
+    pending = result;
+  }
+  if (pending?.status === "complete" || records.some((item) => item.id === id && item.status === "complete")) {
+    const maintenanceKey = await root(user) + "maintenance.json";
+    const maintenance = await readJson<{ lastPrunedDay: string }>(env.BUCKET, maintenanceKey);
+    if (maintenance?.lastPrunedDay !== date) {
+      await pruneArchives(env, user, settings.retentionDays);
+      await env.BUCKET.put(maintenanceKey, JSON.stringify({ lastPrunedDay: date }), { httpMetadata: JSON_HEADERS });
+    }
+  }
 }

@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { guardBrowserApi } from "../../../lib/admin-auth";
 import { getCurrentUser } from "../../../lib/current-user";
 import { isBackupComponentEnabledValue } from "../../../lib/backup-providers";
-import { advanceBackupArchive, configureBackup, createBackupArchive, getBackupSettings, listBackupArchives, withBackupLock, type BackupEnv } from "../../../lib/backup-archive";
+import { advanceBackupArchive, configureBackup, createBackupArchive, getBackupSettings, getLastScheduledBackupError, listBackupArchives, withBackupLock, type BackupEnv } from "../../../lib/backup-archive";
 import { SiteBackupError } from "../../../lib/site-backup-data";
 const headers = { "cache-control": "no-store" };
 const runtime = env as typeof env & BackupEnv;
@@ -14,7 +14,8 @@ export async function GET(request: Request) {
     const settings = await getBackupSettings(env.BUCKET, user);
     const backups = await listBackupArchives(env.BUCKET, user);
     const latestScheduled = backups.find((record) => record.kind === "scheduled");
-    return Response.json({ ok: true, settings, backups, lastError: latestScheduled?.status === "failed" ? latestScheduled.error : null }, { headers });
+    const lastError = await getLastScheduledBackupError(env.BUCKET, user) ?? (latestScheduled?.status === "failed" ? latestScheduled.error : null);
+    return Response.json({ ok: true, settings, backups, lastError }, { headers });
   } catch (error) { return Response.json({ error: error instanceof Error ? error.message : "读取备份失败" }, { status: error instanceof SiteBackupError ? error.status : 500, headers }); }
 }
 export async function POST(request: Request) {
