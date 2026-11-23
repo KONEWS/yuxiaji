@@ -4,6 +4,7 @@ import handler from "vinext/server/app-router-entry";
 import { csrfFailure, getAdminSession } from "../app/lib/admin-auth";
 import { handleMcpOAuth } from "../app/lib/mcp-oauth";
 import { handleMcpRequest } from "../app/lib/mcp-server";
+import { runScheduledBackup } from "../app/lib/backup-archive";
 
 interface Env {
   ASSETS: Fetcher;
@@ -137,6 +138,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 }
 
 const worker = {
+  async scheduled(_event: unknown, env: Env): Promise<void> {
+    await runScheduledBackup(env);
+  },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     return withSecurityHeaders(await handleRequest(request, env, ctx), request);
   },

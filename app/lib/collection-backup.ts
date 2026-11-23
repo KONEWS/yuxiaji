@@ -133,8 +133,20 @@ function text(value: unknown, max: number, fallback = ""): string {
 }
 
 function safeInt(value: unknown, fallback: number | null): number | null {
+  if (value === null || value === undefined || value === "") return fallback;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : fallback;
+}
+
+function validateUrl(value: string, field: string, absolute = false): void {
+  if (!value) return;
+  if (/[\u0000-\u001f\u007f\\]/.test(value) || value.startsWith("//")) throw new CollectionBackupError(`${field} 地址无效`);
+  if (!absolute && value.startsWith("/")) return;
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new CollectionBackupError(`${field} 地址无效`); }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) {
+    throw new CollectionBackupError(`${field} 只支持不含账号密码的 HTTP/HTTPS 地址`);
+  }
 }
 
 function rejectCredentialKeys(value: unknown, where: string, depth = 0): void {
@@ -151,6 +163,8 @@ function parseImage(value: unknown, index: number): BackupImage {
   if (!isRecord(value)) throw new CollectionBackupError(`第 ${index + 1} 张画廊图片格式无效`);
   const thumbnail = text(value.thumbnail ?? value.url, 500);
   if (!thumbnail) throw new CollectionBackupError(`第 ${index + 1} 张画廊图片缺少 thumbnail`);
+  validateUrl(thumbnail, "画廊图片");
+  validateUrl(text(value.sourceUrl, 1000), "画廊来源");
   return {
     thumbnail,
     sourceUrl: text(value.sourceUrl, 1000),
@@ -167,19 +181,10 @@ function parseStorageLink(value: unknown, index: number): BackupStorageLink {
   if (!isRecord(value)) throw new CollectionBackupError(`第 ${index + 1} 条存储关联格式无效`);
   const provider = text(value.provider, 64);
   if (!provider) throw new CollectionBackupError(`第 ${index + 1} 条存储关联缺少 provider`);
-  // 存储关联本身不接受带账号密码的地址，也不接受凭据字段。
-  if (value.url && typeof value.url === "string") {
-    try {
-      const parsed = new URL(value.url);
-      if (parsed.username || parsed.password) {
-        throw new CollectionBackupError(`第 ${index + 1} 条存储关联地址不能包含账号密码`);
-      }
-    } catch (error) {
-      if (error instanceof CollectionBackupError) throw error;
-      // 非绝对地址按空地址处理，后续由存储关联的正规校验再把关；
-      // 这里不直接拒绝，避免把历史相对地址误判为非法文件。
-    }
-  }
+  // An invalid link must abort the import before any writes, never disappear
+  // into a best-effort "skipped" result after its old associations were deleted.
+  validateUrl(text(value.url, 2000), "存储关联", true);
+  if (!text(value.url, 2000) && !text(value.path, 1000)) throw new CollectionBackupError("存储关联缺少地址或路径");
   rejectCredentialKeys(value, "存储关联");
   return {
     provider,
@@ -215,6 +220,9 @@ function parseSubject(value: unknown, index: number): BackupSubject {
   rejectCredentialKeys(metadata, "收藏 metadata");
   const imagesRaw = Array.isArray(value.images) ? value.images : [];
   const linksRaw = Array.isArray(value.storageLinks) ? value.storageLinks : [];
+  if ((value.images !== undefined && !Array.isArray(value.images)) || (value.storageLinks !== undefined && !Array.isArray(value.storageLinks))) {
+    throw new CollectionBackupError("画廊图片和存储关联必须是数组");
+  }
   if (imagesRaw.length > MAX_BACKUP_IMAGES_PER_SUBJECT) {
     throw new CollectionBackupError(`第 ${index + 1} 条收藏画廊图片超过 ${MAX_BACKUP_IMAGES_PER_SUBJECT} 张`);
   }
@@ -224,6 +232,13 @@ function parseSubject(value: unknown, index: number): BackupSubject {
   const tags = Array.isArray(value.tags)
     ? value.tags.map((tag) => String(tag).trim()).filter(Boolean).slice(0, 30)
     : [];
+  for (const field of ["image", "thumbnail", "sourceUrl"] as const) {
+    if (value[field] !== undefined && value[field] !== null && typeof value[field] !== "string") throw new CollectionBackupError(`${field} 必须是字符串或 null`);
+    validateUrl(typeof value[field] === "string" ? value[field] : "", field);
+  }
+  if (typeof value.twitterSource === "string" && (/^[a-z][a-z\d+.-]*:/i.test(value.twitterSource) || value.twitterSource.startsWith("/"))) validateUrl(value.twitterSource, "twitterSource");
+  const images = imagesRaw.map((image, imageIndex) => parseImage(image, imageIndex));
+  if (new Set(images.map((image) => image.thumbnail)).size !== images.length) throw new CollectionBackupError("同一收藏包含重复画廊图片");
   return {
     id: safeInt(value.id, 0) ?? 0,
     type,
@@ -260,7 +275,7 @@ function parseSubject(value: unknown, index: number): BackupSubject {
     twitterSource: text(value.twitterSource, 500),
     metadata,
     updatedAtMs: safeInt(value.updatedAtMs ?? value.updatedAt, Date.now()) ?? Date.now(),
-    images: imagesRaw.map((image, imageIndex) => parseImage(image, imageIndex)),
+    images,
     storageLinks: linksRaw.map((link, linkIndex) => parseStorageLink(link, linkIndex)),
   };
 }
@@ -288,6 +303,8 @@ export function parseCollectionBackup(value: unknown): CollectionBackup {
     throw new CollectionBackupError(`备份条目超过 ${MAX_BACKUP_SUBJECTS} 条`);
   }
   const subjects = value.subjects.map((subject, index) => parseSubject(subject, index));
+  const ids = subjects.filter((subject) => subject.id > 0).map((subject) => subject.id);
+  if (new Set(ids).size !== ids.length) throw new CollectionBackupError("备份包含重复收藏 ID");
   const counts = {
     subjects: subjects.length,
     images: subjects.reduce((sum, subject) => sum + subject.images.length, 0),
@@ -381,6 +398,11 @@ export function planCollectionImport(
       images: subject.images.length, storageLinks: subject.storageLinks.length,
     };
   });
+  const targets = items.filter((item) => item.existingId !== null).map((item) => item.existingId);
+  if (new Set(targets).size !== targets.length) throw new CollectionBackupError("多个备份条目匹配到同一收藏，请先修正备份文件");
+  const newKeys = backup.subjects.filter((subject, index) => items[index].action === "create" && subject.subjectId !== null)
+    .map((subject) => `${subject.type}:${subject.subjectId}:${subject.title}`);
+  if (new Set(newKeys).size !== newKeys.length) throw new CollectionBackupError("备份包含重复的新增收藏");
   return {
     create: items.filter((item) => item.action === "create").length,
     update: items.filter((item) => item.action === "update").length,

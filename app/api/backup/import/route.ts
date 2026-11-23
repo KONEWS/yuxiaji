@@ -1,243 +1,131 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { mediaStorageLinks, userSubjectImages, userSubjects } from "../../../../db/schema";
 import { guardBrowserApi } from "../../../lib/admin-auth";
 import { buildCollectionBackup } from "../../../lib/collection-backup-store";
 import {
-  CollectionBackupError,
-  parseCollectionBackup,
-  planCollectionImport,
-  type BackupSubject,
+  CollectionBackupError, parseCollectionBackup, planCollectionImport,
+  type BackupSubject, type CollectionBackup,
 } from "../../../lib/collection-backup";
 import { getCurrentUser } from "../../../lib/current-user";
 import { sanitizeGalleryImages } from "../../../lib/gallery-images";
-import { sanitizeMediaStorageLink } from "../../../lib/media-storage-links";
+import { MediaStorageLinkValidationError, sanitizeMediaStorageLink } from "../../../lib/media-storage-links";
+import {
+  COLLECTION_BACKUP_TABLE_NAMES, exportCollectionSnapshot, siteBackupFingerprint,
+  siteBackupGuardStatements, siteBackupWriteError, SiteBackupError, type SiteBackup,
+} from "../../../lib/site-backup-data";
 import { sanitizeSubject } from "../../media/route";
 
-/**
- * 收藏导入（备份组件，独立路由）。
- *
- * 安全与可逆约定：
- * - 只接受管理员 Session + CSRF（guardBrowserApi），且只写收藏三张表。
- * - mode=preview 只算计划、不写库；mode=import 必须带 confirmed=true，
- *   且先算出导入前的当前导出（preImportBackup）再写库，写完后
- *   把这份导入前快照原样返回，导入后发现不对可以再用它导回去。
- * - 默认是合并：已存在按 id /（类型+外部 subjectId+标题）更新，
- *   其余新增；绝不因为导入文件里没有某条记录就删除库内记录。
- * - 导入不是跨全部条目的原子事务：某条写失败时停在该条，
- *   之前已写的条目不会自动回滚，响应里会如实返回已写条数
- *   与 preImportBackup，靠重新导入这份快照恢复。
- * - 画廊与存储关联只删 DB 行、不删 R2 原文件：备份里仍引用
- *   的图片地址在重新插入后继续可用，避免误删展示图。
- */
+const headers = { "cache-control": "no-store" };
+
+async function collectionRevision(snapshot: SiteBackup) {
+  return siteBackupFingerprint({
+    ...snapshot,
+    tables: { ...snapshot.tables, user_devices: [], user_state: [], anime_airing_schedule: [] },
+    counts: { ...snapshot.counts, devices: 0, settings: 0, schedules: 0 },
+  });
+}
+
+/** Legacy JSON import: validate everything, then merge in ONE D1 transaction. */
 export async function POST(request: Request) {
   const guard = await guardBrowserApi(request);
   if (guard) return guard;
   const key = getCurrentUser();
+  let preImportBackup: CollectionBackup | undefined;
   try {
     let body: Record<string, unknown>;
     try {
       const parsed = await request.json();
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return Response.json({ error: "请求体必须是 JSON 对象" }, { status: 400 });
-      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
       body = parsed as Record<string, unknown>;
     } catch {
-      return Response.json({ error: "请求体必须是有效 JSON" }, { status: 400 });
+      return Response.json({ error: "请求体必须是有效 JSON 对象", rolledBack: true }, { status: 400, headers });
     }
-
-    let backup;
-    try {
-      backup = parseCollectionBackup(body.backup);
-    } catch (error) {
-      if (error instanceof CollectionBackupError) {
-        return Response.json({ error: error.message }, { status: 400 });
-      }
-      throw error;
-    }
+    const backup = parseCollectionBackup(body.backup);
+    // Validate before the transaction; never discard a malformed attachment
+    // after its old associations have already been removed.
+    const prepared = backup.subjects.map((subject) => {
+      const images = sanitizeGalleryImages(subject.images) ?? [];
+      if (images.length !== subject.images.length) throw new CollectionBackupError(`《${subject.title}》的画廊图片存在重复或无效项`);
+      const links = subject.storageLinks.map((link) => sanitizeMediaStorageLink({ ...link, verifiedAt: link.verifiedAtMs }));
+      if (links.filter((link) => link.isPrimary).length > 1) throw new CollectionBackupError(`《${subject.title}》存在多个主存储关联`);
+      return { subject: sanitizeSubject(toBrowserBody(subject)), images, links };
+    });
 
     const db = getDb();
-    const existingRows = await db
-      .select({ id: userSubjects.id, type: userSubjects.type, subjectId: userSubjects.subjectId, title: userSubjects.title })
-      .from(userSubjects)
-      .where(eq(userSubjects.userKey, key))
-      .orderBy(asc(userSubjects.id));
-    const plan = planCollectionImport(existingRows, backup);
-
-    if (body.mode !== "import") {
-      return Response.json(
-        { ok: true, mode: "preview", plan },
-        { headers: { "cache-control": "no-store" } },
-      );
-    }
-    if (body.confirmed !== true) {
-      return Response.json(
-        { error: "导入前请先预览并确认", plan },
-        { status: 400, headers: { "cache-control": "no-store" } },
-      );
+    const current = await exportCollectionSnapshot(db.$client, key);
+    preImportBackup = await buildCollectionBackup(db, key, current);
+    const plan = planCollectionImport(current.tables.user_subjects.map((row) => ({
+      id: Number(row.id), type: String(row.type), subjectId: row.subject_id === null ? null : Number(row.subject_id), title: String(row.title),
+    })), backup);
+    const revision = await collectionRevision(current);
+    if (body.mode !== "import") return Response.json({ ok: true, mode: "preview", plan, revision }, { headers });
+    if (body.confirmed !== true) return Response.json({ error: "导入前请先预览并确认", plan, preImportBackup, rolledBack: true }, { status: 400, headers });
+    if (body.expectedRevision !== undefined && body.expectedRevision !== revision) {
+      return Response.json({ error: "预览后收藏已更新，请重新预览后再导入。", code: "backup_conflict", rolledBack: true, preImportBackup }, { status: 409, headers });
     }
 
-    // 先备当前数据，再写库。
-    const preImportBackup = await buildCollectionBackup(db, key);
-    let created = 0;
-    let updated = 0;
-    let skippedLinks = 0;
-    const errors: Array<{ title: string; error: string }> = [];
-
-    // 预览与备份条目一一对应，按下标取计划，不按导出 id 查表，
-    // 避免无 id 或重复 id 的手工备份文件把计划张冠李戴。
-    for (let index = 0; index < backup.subjects.length; index += 1) {
-      const subject = backup.subjects[index];
-      const item = plan.items[index];
-      const targetId = item?.existingId ?? null;
-      try {
-        const target = await writeSubject(db, key, subject, targetId);
-        if (targetId === null) created += 1;
-        else updated += 1;
-        skippedLinks += await writeAttachments(db, key, target, subject);
-      } catch (error) {
-        errors.push({
-          title: subject.title,
-          error: error instanceof Error ? error.message : "写入失败",
-        });
-        break;
-      }
+    const statements = siteBackupGuardStatements(db.$client, key, current, COLLECTION_BACKUP_TABLE_NAMES);
+    let nextId = 0;
+    if (plan.create) {
+      const allocationSql = "SELECT max(coalesce((SELECT max(id) FROM user_subjects),0),coalesce((SELECT seq FROM sqlite_sequence WHERE name='user_subjects'),0)) AS id";
+      const row = await db.$client.prepare(allocationSql).first<{ id: number }>();
+      nextId = Number(row?.id ?? 0);
+      if (!Number.isSafeInteger(nextId + plan.create)) throw new CollectionBackupError("收藏 ID 已超过可安全分配的范围");
+      // Guard the global maximum too: another owner may create a new row
+      // between this read and the write transaction.
+      statements.push(db.$client.prepare(`SELECT CASE WHEN (${allocationSql}) = ? THEN 1 ELSE json('site_backup_conflict') END`).bind(nextId));
     }
-
-    return Response.json(
-      {
-        ok: errors.length === 0,
-        mode: "import",
-        created,
-        updated,
-        skippedLinks,
-        errors,
-        preImportBackup,
-      },
-      { status: errors.length ? 500 : 200, headers: { "cache-control": "no-store" } },
-    );
+    const append = (query: { toSQL(): { sql: string; params: unknown[] } }) => {
+      const compiled = query.toSQL();
+      statements.push(db.$client.prepare(compiled.sql).bind(...compiled.params));
+    };
+    const now = new Date();
+    for (let index = 0; index < prepared.length; index += 1) {
+      const item = prepared[index];
+      const existingId = plan.items[index].existingId;
+      const targetId = existingId ?? ++nextId;
+      if (existingId === null) append(db.insert(userSubjects).values({ ...item.subject, id: targetId, userKey: key }));
+      else append(db.update(userSubjects).set(item.subject).where(and(eq(userSubjects.id, targetId), eq(userSubjects.userKey, key))));
+      append(db.delete(userSubjectImages).where(and(eq(userSubjectImages.userKey, key), eq(userSubjectImages.subjectId, targetId))));
+      append(db.delete(mediaStorageLinks).where(and(eq(mediaStorageLinks.userKey, key), eq(mediaStorageLinks.mediaId, targetId))));
+      for (const image of item.images) append(db.insert(userSubjectImages).values({
+        userKey: key, subjectId: targetId, thumbnail: image.thumbnail, sourceUrl: image.sourceUrl,
+        imageHash: image.imageHash, sortOrder: image.sortOrder, isCover: image.isCover,
+        width: image.width, height: image.height, mime: image.mime, createdAt: now, updatedAt: now,
+      }));
+      for (const link of item.links) append(db.insert(mediaStorageLinks).values({
+        ...link, verifiedAt: link.verifiedAt === null ? null : new Date(link.verifiedAt),
+        userKey: key, mediaId: targetId, createdAt: now, updatedAt: now,
+      }));
+    }
+    try { await db.$client.batch(statements); } catch (error) {
+      const failure = siteBackupWriteError(error);
+      return Response.json({
+        ok: false, mode: "import", error: failure.message, code: failure.code, rolledBack: failure.rolledBack,
+        created: failure.rolledBack ? 0 : null, updated: failure.rolledBack ? 0 : null, skippedLinks: 0,
+        errors: [{ error: failure.message }], preImportBackup,
+      }, { status: failure.status, headers });
+    }
+    return Response.json({ ok: true, mode: "import", created: plan.create, updated: plan.update, skippedLinks: 0, errors: [], preImportBackup }, { headers });
   } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "导入收藏失败" },
-      { status: 500, headers: { "cache-control": "no-store" } },
-    );
+    const validation = error instanceof CollectionBackupError || error instanceof MediaStorageLinkValidationError;
+    return Response.json({
+      ok: false, error: error instanceof Error ? error.message : "导入收藏失败", rolledBack: true,
+      ...(error instanceof SiteBackupError ? { code: error.code } : {}),
+      ...(preImportBackup ? { preImportBackup } : {}),
+    }, { status: validation ? 400 : error instanceof SiteBackupError ? error.status : 500, headers });
   }
 }
-
-type Database = ReturnType<typeof getDb>;
 
 function toBrowserBody(subject: BackupSubject): Record<string, unknown> {
   return {
-    mediaType: subject.type,
-    subjectId: subject.subjectId ?? undefined,
-    title: subject.title,
-    jp: subject.jp,
-    note: subject.note,
-    progress: subject.progress,
-    total: subject.total,
-    status: subject.status,
-    kind: subject.kind,
-    score: subject.score,
-    next: subject.next,
-    image: subject.image,
-    globalScore: subject.globalScore,
-    source: subject.source,
-    collection: subject.collection,
-    tags: subject.tags,
-    musicAlbum: subject.musicAlbum,
-    musicArtist: subject.musicArtist,
-    lyricist: subject.lyricist,
-    composer: subject.composer,
-    animeSong: subject.animeSong,
-    visualSubtype: subject.visualSubtype,
-    videoSubtype: subject.videoSubtype,
-    thumbnail: subject.thumbnail,
-    sourceUrl: subject.sourceUrl,
-    pixivPid: subject.pixivPid,
-    author: subject.author,
-    twitterSource: subject.twitterSource,
-    metadata: subject.metadata,
+    mediaType: subject.type, subjectId: subject.subjectId ?? undefined, title: subject.title, jp: subject.jp,
+    note: subject.note, progress: subject.progress, total: subject.total, status: subject.status, kind: subject.kind,
+    score: subject.score, next: subject.next, image: subject.image, globalScore: subject.globalScore, source: subject.source,
+    collection: subject.collection, tags: subject.tags, musicAlbum: subject.musicAlbum, musicArtist: subject.musicArtist,
+    lyricist: subject.lyricist, composer: subject.composer, animeSong: subject.animeSong, visualSubtype: subject.visualSubtype,
+    videoSubtype: subject.videoSubtype, thumbnail: subject.thumbnail, sourceUrl: subject.sourceUrl, pixivPid: subject.pixivPid,
+    author: subject.author, twitterSource: subject.twitterSource, metadata: subject.metadata,
   };
-}
-
-async function writeSubject(
-  db: Database,
-  userKey: string,
-  subject: BackupSubject,
-  targetId: number | null,
-): Promise<number> {
-  const sanitized = sanitizeSubject(toBrowserBody(subject));
-  if (targetId !== null) {
-    await db
-      .update(userSubjects)
-      .set(sanitized)
-      .where(and(eq(userSubjects.id, targetId), eq(userSubjects.userKey, userKey)));
-    return targetId;
-  }
-  const [created] = await db
-    .insert(userSubjects)
-    .values({ ...sanitized, userKey })
-    .returning({ id: userSubjects.id });
-  if (!created) throw new Error("创建收藏失败");
-  return created.id;
-}
-
-async function writeAttachments(
-  db: Database,
-  userKey: string,
-  targetId: number,
-  subject: BackupSubject,
-): Promise<number> {
-  const now = new Date();
-  await db
-    .delete(userSubjectImages)
-    .where(and(eq(userSubjectImages.userKey, userKey), eq(userSubjectImages.subjectId, targetId)));
-  await db
-    .delete(mediaStorageLinks)
-    .where(and(eq(mediaStorageLinks.userKey, userKey), eq(mediaStorageLinks.mediaId, targetId)));
-
-  const images = sanitizeGalleryImages(subject.images) ?? [];
-  for (const image of images) {
-    await db.insert(userSubjectImages).values({
-      userKey,
-      subjectId: targetId,
-      thumbnail: image.thumbnail,
-      sourceUrl: image.sourceUrl,
-      imageHash: image.imageHash,
-      sortOrder: image.sortOrder,
-      isCover: image.isCover,
-      width: image.width,
-      height: image.height,
-      mime: image.mime,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
-
-  let skipped = 0;
-  let primaryUsed = false;
-  for (const link of subject.storageLinks) {
-    try {
-      const sanitized = sanitizeMediaStorageLink({
-        ...link,
-        verifiedAt: link.verifiedAtMs,
-      });
-      // 备份文件手工改动可能导致多个主链接，库内主链接唯一：
-      // 只保留第一条主链接，其余降为非主链接。
-      const isPrimary = sanitized.isPrimary && !primaryUsed;
-      if (sanitized.isPrimary) primaryUsed = true;
-      await db.insert(mediaStorageLinks).values({
-        ...sanitized,
-        verifiedAt: sanitized.verifiedAt === null ? null : new Date(sanitized.verifiedAt),
-        userKey,
-        mediaId: targetId,
-        isPrimary,
-        createdAt: now,
-        updatedAt: now,
-      });
-    } catch {
-      skipped += 1;
-    }
-  }
-  return skipped;
 }

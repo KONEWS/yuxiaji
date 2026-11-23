@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { getCurrentUser } from "../../lib/current-user";
 import { guardBrowserApi } from "../../lib/admin-auth";
+import { putVersionedImage } from "../../lib/versioned-image";
 
 const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 function startsWith(bytes: Uint8Array, signature: number[]) {
@@ -27,7 +28,12 @@ export async function GET(request: Request) {
   const guard = await guardBrowserApi(request);
   if (guard) return guard;
   const email = getCurrentUser();
-  const object = await env.BUCKET.get(await keyFor(email));
+  const baseKey = await keyFor(email);
+  const version = new URL(request.url).searchParams.get("v") || "";
+  const versioned = /^[0-9]{1,20}$/.test(version) && Number(version) > 0
+    ? await env.BUCKET.get(baseKey + "/" + version) : null;
+  // Legacy uploads used one fixed key. Keep those old URLs working.
+  const object = versioned ?? (version.length <= 13 ? await env.BUCKET.get(baseKey) : null);
   if (!object) return new Response("Not found", { status: 404 });
   const headers = new Headers();
   object.writeHttpMetadata(headers);
@@ -49,6 +55,6 @@ export async function POST(request: Request) {
   const detectedType = detectImageType(bytes);
   if (!detectedType || detectedType !== file.type) return Response.json({ error: "图片内容与 MIME 类型不匹配" }, { status: 415 });
   const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  await env.BUCKET.put(await keyFor(email), payload, { httpMetadata: { contentType: detectedType } });
-  return Response.json({ ok: true, url: `/api/avatar?v=${Date.now()}` });
+  const version = await putVersionedImage(env.BUCKET, await keyFor(email), payload, detectedType);
+  return Response.json({ ok: true, url: `/api/avatar?v=${version}` });
 }

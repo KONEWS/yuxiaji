@@ -1,0 +1,9 @@
+{
+  "name": "yuexiaji-site-backup-data-test",
+  "main": "site-backup-data-worker.mjs",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": { "DEFAULT_USER_ID": "site-backup-owner" },
+  "d1_databases": [{ "binding": "DB", "database_name": "site-backup-data-test", "database_id": "00000000-0000-0000-0000-000000000071" }],
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "site-backup-data-test-assets" }]
+}
