@@ -149,6 +149,15 @@ function validateUrl(value: string, field: string, absolute = false): void {
   }
 }
 
+function sourceText(value: unknown, field: string): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string" || value.length > 1000) throw new CollectionBackupError(`${field} 必须是最多 1000 字符的来源文本`);
+  // Existing media APIs preserve newline-separated sources. Keep the original
+  // text, including CRLF and spacing, after checking every non-empty line.
+  for (const line of value.split(/\r\n|\r|\n/)) validateUrl(line.trim(), field);
+  return value;
+}
+
 function rejectCredentialKeys(value: unknown, where: string, depth = 0): void {
   if (!value || typeof value !== "object" || depth > 4) return;
   for (const [key, candidate] of Object.entries(value as Record<string, unknown>)) {
@@ -164,10 +173,10 @@ function parseImage(value: unknown, index: number): BackupImage {
   const thumbnail = text(value.thumbnail ?? value.url, 500);
   if (!thumbnail) throw new CollectionBackupError(`第 ${index + 1} 张画廊图片缺少 thumbnail`);
   validateUrl(thumbnail, "画廊图片");
-  validateUrl(text(value.sourceUrl, 1000), "画廊来源");
+  const sourceUrl = sourceText(value.sourceUrl, "画廊来源");
   return {
     thumbnail,
-    sourceUrl: text(value.sourceUrl, 1000),
+    sourceUrl,
     imageHash: text(value.imageHash, 128),
     sortOrder: safeInt(value.sortOrder, index) ?? index,
     isCover: Boolean(value.isCover),
@@ -232,10 +241,11 @@ function parseSubject(value: unknown, index: number): BackupSubject {
   const tags = Array.isArray(value.tags)
     ? value.tags.map((tag) => String(tag).trim()).filter(Boolean).slice(0, 30)
     : [];
-  for (const field of ["image", "thumbnail", "sourceUrl"] as const) {
+  for (const field of ["image", "thumbnail"] as const) {
     if (value[field] !== undefined && value[field] !== null && typeof value[field] !== "string") throw new CollectionBackupError(`${field} 必须是字符串或 null`);
     validateUrl(typeof value[field] === "string" ? value[field] : "", field);
   }
+  const sourceUrl = sourceText(value.sourceUrl, "来源链接");
   if (typeof value.twitterSource === "string" && (/^[a-z][a-z\d+.-]*:/i.test(value.twitterSource) || value.twitterSource.startsWith("/"))) validateUrl(value.twitterSource, "twitterSource");
   const images = imagesRaw.map((image, imageIndex) => parseImage(image, imageIndex));
   if (new Set(images.map((image) => image.thumbnail)).size !== images.length) throw new CollectionBackupError("同一收藏包含重复画廊图片");
@@ -269,7 +279,7 @@ function parseSubject(value: unknown, index: number): BackupSubject {
     visualSubtype: text(value.visualSubtype, 30),
     videoSubtype: text(value.videoSubtype, 30),
     thumbnail: text(value.thumbnail ?? value.image, 500),
-    sourceUrl: text(value.sourceUrl, 1000),
+    sourceUrl,
     pixivPid: text(value.pixivPid, 80),
     author: text(value.author, 160),
     twitterSource: text(value.twitterSource, 500),

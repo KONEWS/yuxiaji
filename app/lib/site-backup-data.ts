@@ -11,7 +11,7 @@ type Column = {
   min?: number;
   max?: number;
   json?: "array" | "object";
-  url?: "absolute" | "asset" | "reference";
+  url?: "absolute" | "asset" | "reference" | "sources";
   values?: readonly Cell[];
 };
 const text = (max = 16_384): Column => ({ kind: "text", max });
@@ -20,6 +20,7 @@ const number = (min = 0, max = Number.MAX_SAFE_INTEGER): Column => ({ kind: "num
 const nullable = (column: Column): Column => ({ ...column, nullable: true });
 const json = (shape: "array" | "object"): Column => ({ ...text(512_000), json: shape });
 const url = (kind: "absolute" | "asset" = "asset"): Column => ({ ...text(4096), url: kind });
+const sources = (): Column => ({ ...text(4096), url: "sources" });
 const flag: Column = { ...integer(0, 1), values: [0, 1] };
 const timestamp = integer(0, 8_640_000_000_000_000);
 
@@ -32,11 +33,11 @@ const TABLE_COLUMNS = {
     progress: integer(), total: integer(), status: text(), kind: text(), score: nullable(integer(0, 10)),
     next: nullable(text()), image: nullable(url()), global_score: nullable(number(0, 10)), source: text(),
     collection: text(), tags: json("array"), music_album: text(), music_artist: text(), lyricist: text(), composer: text(),
-    anime_song: flag, visual_subtype: text(), video_subtype: text(), thumbnail: url(), source_url: url(),
+    anime_song: flag, visual_subtype: text(), video_subtype: text(), thumbnail: url(), source_url: sources(),
     pixiv_pid: text(), author: text(), twitter_source: { ...text(500), url: "reference" }, character_tags: json("array"), metadata: json("object"), updated_at: timestamp,
   },
   user_subject_images: {
-    id: integer(1), subject_id: integer(1), thumbnail: url(), source_url: url(), image_hash: text(128),
+    id: integer(1), subject_id: integer(1), thumbnail: url(), source_url: sources(), image_hash: text(128),
     sort_order: integer(), is_cover: flag, width: nullable(integer(0, 100_000)), height: nullable(integer(0, 100_000)),
     mime: text(80), created_at: timestamp, updated_at: timestamp,
   },
@@ -130,13 +131,20 @@ export function validateBackupUrl(value: string, context: string, absolute = fal
   }
 }
 
+/** Historical source fields can contain one URL per line. Validate a trimmed
+ * copy of each line while preserving the exact original text in the snapshot. */
+function validateSourceUrls(value: string, context: string): void {
+  for (const line of value.split(/\r\n|\r|\n/)) validateBackupUrl(line.trim(), context);
+}
+
 function readCell(value: unknown, spec: Column, context: string): Cell {
   if (value === null && spec.nullable) return null;
   if (spec.kind === "text") {
     if (typeof value !== "string" || value.length > (spec.max ?? 16_384)) throw new SiteBackupError(`${context} 字符串无效或过长`);
     // The existing X/Twitter field also accepts @handles and bare domains.
     // Preserve those values while still rejecting executable URL schemes.
-    if (spec.url === "reference" && !/^[a-z][a-z\d+.-]*:/i.test(value) && !value.startsWith("/")) {
+    if (spec.url === "sources") validateSourceUrls(value, context);
+    else if (spec.url === "reference" && !/^[a-z][a-z\d+.-]*:/i.test(value) && !value.startsWith("/")) {
       if (control.test(value)) throw new SiteBackupError(`${context} 来源无效`);
     } else if (spec.url) validateBackupUrl(value, context, spec.url === "absolute");
     if (spec.json) {

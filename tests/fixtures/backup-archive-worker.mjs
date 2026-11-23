@@ -55,7 +55,17 @@ const testWorker = {
       }
       if (url.pathname === "/__test/cron") {
         const body = await request.json();
-        await runScheduledBackup({ ...env, ...(body.componentEnabled === undefined ? {} : { BACKUP_COMPONENT_ENABLED: body.componentEnabled }) }, new Date(body.now));
+        const injectedError = new Error("injected D1 snapshot batch failure");
+        const database = body.failBatch ? {
+          prepare: env.DB.prepare.bind(env.DB),
+          async batch() { throw injectedError; },
+        } : env.DB;
+        try {
+          await runScheduledBackup({ ...env, DB: database, ...(body.componentEnabled === undefined ? {} : { BACKUP_COMPONENT_ENABLED: body.componentEnabled }) }, new Date(body.now));
+        } catch (error) {
+          if (!body.failBatch) throw error;
+          return Response.json({ error: error.message, sameError: error === injectedError }, { status: 500 });
+        }
         return Response.json({ ok: true });
       }
       if (url.pathname === "/__test/split-download") {

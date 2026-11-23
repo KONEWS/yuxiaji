@@ -136,6 +136,99 @@ test("backup preserves supported legacy X handles and fractional preferences", a
   assert.deepEqual(businessContent(await snapshot()), businessContent(backup));
 });
 
+const multilineSources = [
+  "https://example.com/source-one\nhttp://example.com/source-two",
+  "https://example.com/source-one\r\nhttps://example.com/source-two",
+  "  https://example.com/source-one  \r\n https://example.com/source-two   ",
+];
+
+test("site export and exact restore preserve multiline source URLs including original line endings and surrounding spaces", async () => {
+  for (const source of multilineSources) {
+    await sql([
+      { sql: "UPDATE user_subjects SET source_url=? WHERE user_key=? AND id=10", params: [source, owner] },
+      { sql: "UPDATE user_subject_images SET source_url=? WHERE user_key=? AND id=201", params: [source, owner] },
+    ]);
+    const backup = await snapshot();
+    assert.equal(backup.tables.user_subjects.find((row) => row.id === 10).source_url, source);
+    assert.equal(backup.tables.user_subject_images[0].source_url, source);
+    await sql([
+      { sql: "UPDATE user_subjects SET source_url='https://example.com/edited' WHERE user_key=? AND id=10", params: [owner] },
+      { sql: "UPDATE user_subject_images SET source_url='https://example.com/edited' WHERE user_key=? AND id=201", params: [owner] },
+    ]);
+    const restored = await api("/__test/site/restore", { backup, expectedCurrent: await snapshot() });
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+    assert.deepEqual(businessContent(await snapshot()), businessContent(backup));
+    const saved = await sql([
+      { sql: "SELECT source_url FROM user_subjects WHERE user_key=? AND id=10", params: [owner] },
+      { sql: "SELECT source_url FROM user_subject_images WHERE user_key=? AND id=201", params: [owner] },
+    ]);
+    assert.deepEqual(saved.map((result) => result.results[0].source_url), [source, source]);
+  }
+});
+
+test("legacy JSON export and merge import preserve multiline source URLs byte for byte", async () => {
+  for (const source of multilineSources) {
+    await sql([
+      { sql: "UPDATE user_subjects SET source_url=? WHERE user_key=? AND id=10", params: [source, owner] },
+      { sql: "UPDATE user_subject_images SET source_url=? WHERE user_key=? AND subject_id=20", params: [source, owner] },
+    ]);
+    const backup = await collection();
+    assert.equal(backup.subjects.find((row) => row.id === 10).sourceUrl, source);
+    assert.equal(backup.subjects.find((row) => row.id === 20).images[0].sourceUrl, source);
+    await sql([
+      { sql: "UPDATE user_subjects SET source_url='https://example.com/edited' WHERE user_key=? AND id=10", params: [owner] },
+      { sql: "UPDATE user_subject_images SET source_url='https://example.com/edited' WHERE user_key=? AND subject_id=20", params: [owner] },
+    ]);
+    const imported = await api("/api/backup/import", { mode: "import", confirmed: true, backup });
+    assert.equal(imported.status, 200, JSON.stringify(imported.body));
+    const after = await collection();
+    assert.equal(after.subjects.find((row) => row.id === 10).sourceUrl, source);
+    assert.equal(after.subjects.find((row) => row.id === 20).images[0].sourceUrl, source);
+    const saved = await sql([
+      { sql: "SELECT source_url FROM user_subjects WHERE user_key=? AND id=10", params: [owner] },
+      { sql: "SELECT source_url FROM user_subject_images WHERE user_key=? AND subject_id=20", params: [owner] },
+    ]);
+    assert.deepEqual(saved.map((result) => result.results[0].source_url), [source, source]);
+  }
+});
+
+test("unsafe source lines and multiline image or storage addresses reject both import formats without writes", async () => {
+  const current = await snapshot();
+  const legacy = await collection();
+  const cases = [
+    {
+      site: (backup) => { backup.tables.user_subjects[0].source_url = "https://example.com/source\njavascript:alert(1)"; },
+      collection: (backup) => { backup.subjects[0].sourceUrl = "https://example.com/source\njavascript:alert(1)"; },
+    },
+    {
+      site: (backup) => { backup.tables.user_subject_images[0].source_url = "https://example.com/source\r\n data:text/html,unsafe "; },
+      collection: (backup) => { backup.subjects.find((row) => row.id === 20).images[0].sourceUrl = "https://example.com/source\r\n data:text/html,unsafe "; },
+    },
+    {
+      site: (backup) => { backup.tables.user_subject_images[0].thumbnail = multilineSources[0]; },
+      collection: (backup) => { backup.subjects.find((row) => row.id === 20).images[0].thumbnail = multilineSources[0]; },
+    },
+    {
+      site: (backup) => { backup.tables.media_storage_links[0].url = multilineSources[0]; },
+      collection: (backup) => { backup.subjects.find((row) => row.id === 20).storageLinks[0].url = multilineSources[0]; },
+    },
+  ];
+  for (const invalid of cases) {
+    const fullBackup = structuredClone(current);
+    fullBackup.tables.user_subjects[0].note = "invalid import must not apply this valid edit";
+    invalid.site(fullBackup);
+    const restored = await api("/__test/site/restore", { backup: fullBackup, expectedCurrent: current });
+    assert.equal(restored.status, 400, JSON.stringify(restored.body));
+    assert.deepEqual(businessContent(await snapshot()), businessContent(current));
+    const collectionBackup = structuredClone(legacy);
+    collectionBackup.subjects[0].note = "invalid import must not apply this valid edit";
+    invalid.collection(collectionBackup);
+    const imported = await api("/api/backup/import", { mode: "import", confirmed: true, backup: collectionBackup });
+    assert.equal(imported.status, 400, JSON.stringify(imported.body));
+    assert.deepEqual(businessContent(await snapshot()), businessContent(current));
+  }
+});
+
 test("full restore exactly restores business data and removes later additions while preserving other owners and authentication", async () => {
   const backup = await snapshot();
   const beforeOthers = await sql([
