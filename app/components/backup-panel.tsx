@@ -7,7 +7,7 @@ import {
 } from "../lib/backup-client";
 import { inspectBackupZip, readBackupZipEntry } from "../lib/backup-zip";
 
-type ProviderStatus = { id: string; label: string; configured: boolean; ready: boolean; callbackUrl?: string; authorizationExpired?: boolean };
+type ProviderStatus = { id: string; label: string; configured: boolean; ready: boolean; backupStatus?: string; callbackUrl?: string; authorizationExpired?: boolean };
 type ImportPlan = { create: number; update: number; total: number };
 type RestorePreview = {
   backup: ArchiveSummary; current: BackupCounts; incoming: BackupCounts; expectedFingerprint: string;
@@ -545,7 +545,7 @@ export function BackupPanel() {
           {providers.map((provider) => <div key={provider.id} className="backup-details-body">
             <div className="backup-provider">
               <b>{provider.label}</b><span>{provider.id === "baidu" ? provider.configured ? provider.authorizationExpired ? "授权已过期" : "已授权" : "未授权" : provider.configured ? "已连接" : "未连接"}</span>
-              {!provider.ready && <span>备份上传尚未接通</span>}
+              {provider.backupStatus && <span>{provider.backupStatus}</span>}
               {provider.configured && <button type="button" className="auth-link" disabled={busy} onClick={() => disconnectProvider(provider)}>解绑</button>}
             </div>
             {provider.id === "baidu" && provider.callbackUrl && <>
@@ -557,7 +557,7 @@ export function BackupPanel() {
                 <label>SecretKey<input type="password" value={baiduSecretKey} maxLength={256} autoComplete="off" placeholder="百度应用 SecretKey" disabled={busy} onChange={(event) => setBaiduSecretKey(event.target.value)} /></label>
               </div>
               <div className="backup-actions"><button type="button" className="auth-primary" disabled={busy || !baiduAppKey.trim() || !baiduSecretKey.trim()} onClick={() => authorizeBaidu(false)}>{provider.configured ? "更换应用并授权" : "授权百度网盘"}</button></div>
-              <p className="backup-small-note">在百度官方页面完成登录和授权后自动返回。应用密钥与令牌仅在服务端加密保存；本阶段不上传文件。</p>
+              <p className="backup-small-note">在百度官方页面完成登录和授权后自动返回。开启自动备份后，每 5 天保存一份完整 ZIP 到百度网盘「我的应用数据／备份／月下集备份」。</p>
             </>}
           </div>)}
         </div>

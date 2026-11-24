@@ -10,7 +10,6 @@ import {
   BACKUP_PROVIDERS,
   getBackupProvider,
   isBackupComponentEnabledValue,
-  uploadBackupToProvider,
 } from "../app/lib/backup-providers.ts";
 
 function validBackup() {
@@ -80,12 +79,9 @@ test("planCollectionImport 先按 id、再按类型加外部 id 加标题匹配"
   assert.equal(plan.items[1].action, "create");
 });
 
-test("网盘注册表目前只有百度占位，且上传明确返回未接通", async () => {
+test("百度支持自动备份并遵守组件开关", () => {
   assert.equal(BACKUP_PROVIDERS.length, 1);
-  assert.equal(getBackupProvider("baidu")?.ready, false);
-  const result = await uploadBackupToProvider("baidu", { name: "x.json", text: "{}" });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /尚未/);
+  assert.equal(getBackupProvider("baidu")?.ready, true);
   assert.equal(isBackupComponentEnabledValue("0"), false);
   assert.equal(isBackupComponentEnabledValue(undefined), true);
 });

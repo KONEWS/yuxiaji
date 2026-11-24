@@ -406,7 +406,7 @@ test("401 unique images download as two complete-manifest ZIP parts with bounded
   assert.match(invalid.body.error, /分包编号无效/);
 });
 
-test("Baidu OAuth uses the official endpoint, session-bound one-use state, and encrypted credentials without enabling uploads", async () => {
+test("Baidu OAuth uses the official endpoint, session-bound one-use state, and encrypted credentials for scheduled uploads", async () => {
   const path = "/api/backup/providers/baidu";
   const body = { appKey: "fixtureKey", secretKey: "fixtureSecret" };
   const anonymous = await request(path, { method: "POST", headers: { cookie: "", "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -432,7 +432,7 @@ test("Baidu OAuth uses the official endpoint, session-bound one-use state, and e
   assert.match(finish.headers.get("location"), /baidu=success/);
   const status = await api("/api/backup/providers");
   assert.equal(status.body.providers[0].configured, true);
-  assert.equal(status.body.providers[0].ready, false);
+  assert.equal(status.body.providers[0].ready, true);
   assert.ok(!JSON.stringify(status.body).includes("fixtureAccess"));
   assert.ok(!JSON.stringify(status.body).includes("fixtureSecret"));
   const [rows] = await sql(["SELECT provider,token_ciphertext FROM external_service_credentials"]);
@@ -440,6 +440,14 @@ test("Baidu OAuth uses the official endpoint, session-bound one-use state, and e
   assert.equal(rows.results[0].provider, "baidu");
   assert.match(rows.results[0].token_ciphertext, /^v1\./);
   assert.ok(!rows.results[0].token_ciphertext.includes("fixtureSecret"));
+  const clock = Date.now();
+  assert.equal((await api("/__test/cron", { now: clock })).status, 200);
+  const firstCopy = await api("/__test/baidu-copy", { now: clock });
+  assert.equal(firstCopy.status, 200);
+  assert.deepEqual(firstCopy.body.calls, ["mkdir", "precreate", "block", "create"], JSON.stringify(firstCopy.body));
+  assert.match((await api("/api/backup/providers")).body.providers[0].backupStatus, /已保存/);
+  const early = await api("/__test/baidu-copy", { now: clock + 4 * 86400000 });
+  assert.deepEqual(early.body.calls, []);
   const replay = await request(path + "?state=" + state + "&code=fixtureCode", { redirect: "manual" });
   assert.match(replay.headers.get("location"), /baidu=invalid/);
   const renewed = await api(path, { reuse: true });

@@ -1,3 +1,5 @@
+declare class FixedLengthStream extends TransformStream<Uint8Array, Uint8Array> { constructor(length: number); }
+
 interface Fetcher {
   fetch(request: Request): Promise<Response>;
 }
@@ -41,7 +43,7 @@ interface R2Object {
 
 interface R2Bucket {
   head(key: string): Promise<Omit<R2Object, "body" | "arrayBuffer" | "text" | "json"> | null>;
-  get(key: string, options?: { onlyIf?: { etagMatches?: string } }): Promise<R2Object | null>;
+  get(key: string, options?: { range?: { offset: number; length: number }; onlyIf?: { etagMatches?: string } }): Promise<R2Object | null>;
   put(key: string, value: ReadableStream | ArrayBuffer | ArrayBufferView | string | Blob, options?: {
     httpMetadata?: { contentType?: string };
     customMetadata?: Record<string, string>;

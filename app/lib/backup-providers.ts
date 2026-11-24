@@ -17,7 +17,7 @@
  *
  * 当前状态（诚实标注，不虚报）：
  * - 百度（baidu）支持管理员填写应用凭据、OAuth 跳转与回调换 Token。
- *   刷新与上传 API 仍未接通，uploadBackup 明确报错，不会假装成功。
+ *   每五天将完整 ZIP 备份保存到百度应用目录，传输由定时任务负责。
  *   授权逻辑独立在 baidu-backup-oauth.ts；应用和 Token 均加密保存。
  */
 
@@ -48,6 +48,7 @@ export type BackupProviderStatus = {
   authorizationExpiresAt?: number | null;
   authorizationExpired?: boolean;
   callbackUrl?: string;
+  backupStatus?: string;
 };
 
 export class BackupProviderError extends Error {
@@ -67,9 +68,9 @@ export const BACKUP_PROVIDERS: BackupProvider[] = [
     id: "baidu",
     label: "百度网盘",
     kind: "oauth",
-    description: "网站侧 OAuth 绑定后，可把收藏导出文件手动上传到百度网盘。",
-    ready: false,
-    notReadyReason: "百度网盘授权入口已预留；自动刷新和网站上传尚未接通。",
+    description: "每五天自动保存完整备份至我的应用数据／备份／月下集备份。",
+    ready: true,
+    notReadyReason: null,
   },
 ];
 
@@ -86,25 +87,4 @@ export function getBackupProvider(id: string): BackupProvider | null {
 export function isBackupComponentEnabledValue(value: unknown): boolean {
   if (value === undefined || value === null || value === "") return true;
   return !["0", "false", "off"].includes(String(value).toLowerCase());
-}
-
-/**
- * 百度适配器占位：只暴露“尚未接通”这一事实。
- * 以后接通时，本函数改为走服务端解密后的 OAuth Token
- * 调百度上传接口；调用方（面板 / 路由）的签名不需要变。
- */
-export async function uploadBackupToProvider(
-  providerId: string,
-  file: { name: string; text: string },
-): Promise<{ ok: false; reason: string }> {
-  // 占位阶段不上传文件；保留参数签名，供接通后直接使用。
-  void file;
-  const provider = getBackupProvider(providerId);
-  if (!provider) throw new BackupProviderError(`未知的备份网盘：${providerId}`);
-  if (!provider.ready) {
-    return { ok: false, reason: provider.notReadyReason ?? "该网盘尚未接通" };
-  }
-  // ready 的适配器以后在这里实现；现在注册表里没有任何 ready 项，
-  // 走到这里说明注册表与实现不一致，宁可报错也不假装上传成功。
-  throw new BackupProviderError(`网盘 ${provider.label} 标记为 ready，但未实现上传`);
 }

@@ -37,10 +37,16 @@ export async function GET(request: Request) {
     const byProvider = new Map(rows.map((row) => [row.provider, row]));
     const providers: BackupProviderStatus[] = BACKUP_PROVIDERS.map((provider) => {
       const row = byProvider.get(provider.id);
+      let backupStatus: string | undefined;
       let authorizationExpiresAt: number | null = null;
       if (provider.id === "baidu" && row) {
         try {
-          const expiry = JSON.parse(row.metadata).expiresAt;
+          const m = JSON.parse(row.metadata);
+          const expiry = m.expiresAt;
+          if (m.error) backupStatus = m.error;
+          else if (m.job) backupStatus = `正在上传第 ${m.job.part} / ${m.job.count} 个 ZIP 分包`;
+          else if (m.completed) backupStatus = `已保存 ${m.completed.replace(/^daily-/, "")} 的完整备份`;
+          else backupStatus = "等待首次自动备份";
           if (typeof expiry === "number" && Number.isFinite(expiry)) authorizationExpiresAt = expiry;
         } catch { /* Old or invalid metadata is not proof of authorization. */ }
       }
@@ -58,7 +64,7 @@ export async function GET(request: Request) {
           : null,
         ready: provider.ready,
         notReadyReason: provider.notReadyReason,
-        ...(provider.id === "baidu" ? { callbackUrl: baiduCallbackUrl(request), authorizationExpiresAt, authorizationExpired: authorizationExpiresAt !== null && authorizationExpiresAt <= Date.now() } : {}),
+        ...(provider.id === "baidu" ? { callbackUrl: baiduCallbackUrl(request), backupStatus, authorizationExpiresAt, authorizationExpired: authorizationExpiresAt !== null && authorizationExpiresAt <= Date.now() } : {}),
       };
     });
     return Response.json(
