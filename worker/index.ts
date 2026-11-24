@@ -141,7 +141,14 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
 const worker = {
   async scheduled(_event: unknown, env: Env): Promise<void> {
     try { await runScheduledBackup(env); }
-    finally { await runBaiduBackup(env); }
+    finally {
+      // Each confirmed part has its own checkpoint. Leave time and external request
+      // budget for the daily snapshot, lease renewal and any upstream retries.
+      const deadline = Date.now() + 90000;
+      for (let part = 0; part < 3 && Date.now() < deadline; part++) {
+        if (!await runBaiduBackup(env)) break;
+      }
+    }
   },
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     return withSecurityHeaders(await handleRequest(request, env, ctx), request);
