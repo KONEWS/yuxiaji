@@ -66,7 +66,12 @@ const testWorker = {
           const url = new URL(input);
           const method = url.searchParams.get("method");
           if (url.pathname.endsWith("/token")) return Response.json({ access_token: "test", refresh_token: "test", expires_in: 86400 });
+          if (method === "locateupload") {
+            calls.push("locate");
+            return Response.json({ servers: [{ server: "https://untrusted.invalid" }, { server: "https://test.baidupcs.com" }] });
+          }
           if (method === "upload") {
+            if (url.hostname !== "test.baidupcs.com") throw new Error("unexpected test upload host");
             calls.push("block");
             const bytes = await init.body.get("file").arrayBuffer();
             return Response.json({ md5: createHash("md5").update(new Uint8Array(bytes)).digest("hex") });
