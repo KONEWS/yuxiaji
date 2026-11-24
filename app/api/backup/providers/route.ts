@@ -1,3 +1,4 @@
+import { runBaiduBackup } from "../../../lib/baidu-scheduled-backup";
 import { env } from "cloudflare:workers";
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../../../db";
@@ -44,7 +45,7 @@ export async function GET(request: Request) {
           const m = JSON.parse(row.metadata);
           const expiry = m.expiresAt;
           if (m.error) backupStatus = m.error;
-          else if (m.job) backupStatus = `正在上传第 ${m.job.part} / ${m.job.count} 个 ZIP 分包`;
+          else if (m.job) backupStatus = !m.job.count ? "正在准备网盘备份" : `正在上传第 ${m.job.part} / ${m.job.count} 个 ZIP 分包`;
           else if (m.completed) backupStatus = `已保存 ${m.completed.replace(/^daily-/, "")} 的完整备份`;
           else backupStatus = "等待首次自动备份";
           if (typeof expiry === "number" && Number.isFinite(expiry)) authorizationExpiresAt = expiry;
@@ -111,5 +112,17 @@ export async function DELETE(request: Request) {
       { error: error instanceof Error ? error.message : "解绑网盘失败" },
       { status: 500, headers: { "cache-control": "no-store" } },
     );
+  }
+}
+
+export async function POST(request: Request) {
+  const guard = await guardBrowserApi(request);
+  if (guard) return guard;
+  if (!componentEnabled()) return Response.json({ error: "备份组件已关闭" }, { status: 404 });
+  try {
+    const more = await runBaiduBackup(env);
+    return Response.json({ ok: true, more: more === true }, { headers: { "cache-control": "no-store" } });
+  } catch {
+    return Response.json({ error: "备份任务正忙，请稍后查看进度。" }, { status: 409 });
   }
 }
