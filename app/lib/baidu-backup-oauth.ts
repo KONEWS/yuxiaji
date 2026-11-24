@@ -140,9 +140,10 @@ export async function finishBaiduBackupOAuth(request: Request, exchange: typeof 
       client_secret: pending.secretKey, redirect_uri: pending.redirectUri,
     }).toString();
     const response = await exchange(endpoint, {
-      method: "GET", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000),
+      method: "GET", redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(10000),
       headers: { accept: "application/json" },
     });
+    if (response.status >= 300 && response.status < 400) throw new Error("Unexpected token endpoint redirect");
     stage = "token_response";
     const payload = await response.json() as Record<string, unknown>;
     if (!response.ok || payload.error) {

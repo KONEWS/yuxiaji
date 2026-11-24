@@ -112,8 +112,9 @@ const testWorker = {
       }
       if (url.pathname === "/api/backup/providers/baidu" && request.method === "GET") {
         return finishBaiduBackupOAuth(request, async (endpoint, init) => {
-          const tokenUrl = new URL(endpoint);
-          if (tokenUrl.origin + tokenUrl.pathname !== "https://openapi.baidu.com/oauth/2.0/token" || init.method !== "GET" || tokenUrl.searchParams.get("client_secret") !== "fixtureSecret" || tokenUrl.searchParams.get("code") !== "fixtureCode") {
+          const outbound = new Request(endpoint, init);
+          const tokenUrl = new URL(outbound.url);
+          if (tokenUrl.origin + tokenUrl.pathname !== "https://openapi.baidu.com/oauth/2.0/token" || outbound.method !== "GET" || outbound.redirect !== "manual" || tokenUrl.searchParams.get("client_secret") !== "fixtureSecret" || tokenUrl.searchParams.get("code") !== "fixtureCode") {
             return Response.json({ error: "invalid_grant" }, { status: 400 });
           }
           return Response.json({ access_token: "fixtureAccess", refresh_token: "fixtureRefresh", expires_in: 3600, scope: "basic netdisk" });
