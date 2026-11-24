@@ -26,7 +26,7 @@ function apiUrl(base: string, values: Record<string, string>) {
 
 async function call(url: URL, stage: string, body: FormData | URLSearchParams): Promise<Reply> {
   try {
-    const response = await fetch(url, { method: "POST", body, redirect: "manual", signal: AbortSignal.timeout(60000) });
+    const response = await fetch(url, { method: "POST", body, redirect: "manual", signal: AbortSignal.timeout(30000) });
     const data: Reply = await response.json().catch(() => { throw new BaiduFailure(stage + "：非 JSON 响应", response.status); });
     const code = data.errno ?? data.error_code;
     if (!response.ok || (code !== undefined && code !== 0)) throw new BaiduFailure(stage, code ?? response.status);
@@ -59,7 +59,9 @@ async function ensureFolder(token: string) {
 
 async function uploadHosts(token: string, path: string, uploadid: string) {
   const locator = apiUrl(locatorApi, { method: "locateupload", appid: "250528", upload_version: "2.0", access_token: token, path, uploadid });
-  const response = await fetch(locator, { redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(15000) });
+  const fallback = "https://d.pcs.baidu.com/rest/2.0/pcs/superfile2";
+  const response = await fetch(locator, { redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(12000) }).catch(() => null);
+  if (!response?.ok) return [fallback];
   const info = await response.json().catch(() => null) as { servers?: { server?: string }[] } | null;
   const hosts: string[] = [];
   for (const { server } of info?.servers ?? []) {
@@ -69,8 +71,7 @@ async function uploadHosts(token: string, path: string, uploadid: string) {
         !/^(?:[a-z0-9-]+\.)*(?:baidupcs\.com|pcs\.baidu\.com)$/.test(url.hostname)) continue;
     hosts.push("https://" + url.hostname + "/rest/2.0/pcs/superfile2");
   }
-  if (!hosts.length) throw new BaiduFailure("百度未返回可用的上传节点", response.status);
-  return [...new Set(hosts)].slice(0, 3);
+  return [...new Set([...hosts.slice(0, 2), fallback])];
 }
 
 // Use small standalone restore-compatible ZIPs, leaving headroom for the manifest and HTTP buffers.
