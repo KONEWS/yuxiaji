@@ -26,7 +26,8 @@ function enabled() {
 function failure(error: string, status: number) {
   return Response.json({ error }, { status, headers });
 }
-function returnToSettings(request: Request, result: "success" | "cancelled" | "invalid" | "failed") {
+type Stage = "pending_read" | "exchange" | "invalid_client" | "invalid_grant" | "token_response" | "save";
+function returnToSettings(request: Request, result: "success" | "cancelled" | "invalid" | Stage) {
   const target = new URL("/settings/security", request.url);
   target.searchParams.set("baidu", result);
   target.hash = "backup-cloud";
@@ -106,6 +107,7 @@ export async function finishBaiduBackupOAuth(request: Request, exchange: typeof 
   const url = new URL(request.url);
   const state = url.searchParams.get("state");
   if (!state || state.length > 128) return returnToSettings(request, "invalid");
+  let stage: Stage = "pending_read";
   let ciphertext: string | undefined;
   try {
     const row = await credential(BAIDU_PENDING_PROVIDER, current.account.id);
@@ -131,6 +133,7 @@ export async function finishBaiduBackupOAuth(request: Request, exchange: typeof 
       await removePending(current.account.id, ciphertext);
       return returnToSettings(request, "cancelled");
     }
+    stage = "exchange";
     const response = await exchange(TOKEN, {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(10000),
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
@@ -139,8 +142,13 @@ export async function finishBaiduBackupOAuth(request: Request, exchange: typeof 
         client_secret: pending.secretKey, redirect_uri: pending.redirectUri,
       }),
     });
+    stage = "token_response";
     const payload = await response.json() as Record<string, unknown>;
-    if (!response.ok || payload.error || typeof payload.access_token !== "string" || !payload.access_token ||
+    if (!response.ok || payload.error) {
+      stage = payload.error === "invalid_client" || payload.error === "invalid_grant" ? payload.error : "exchange";
+      throw new Error("Token exchange rejected");
+    }
+    if (typeof payload.access_token !== "string" || !payload.access_token ||
         typeof payload.refresh_token !== "string" || !payload.refresh_token ||
         payload.access_token.length > 8192 || payload.refresh_token.length > 8192 ||
         typeof payload.expires_in !== "number" || !Number.isFinite(payload.expires_in) ||
@@ -153,6 +161,7 @@ export async function finishBaiduBackupOAuth(request: Request, exchange: typeof 
       appKey: pending.appKey, secretKey: pending.secretKey, accessToken: payload.access_token,
       refreshToken: payload.refresh_token, expiresAt: now + payload.expires_in * 1000,
     };
+    stage = "save";
     const sealed = await encryptCredential(JSON.stringify(authorized));
     // Both statements run atomically. An unlink or new start during exchange
     // removes/replaces the claimed row and makes this conditional insert a no-op.
@@ -165,6 +174,7 @@ export async function finishBaiduBackupOAuth(request: Request, exchange: typeof 
     return returnToSettings(request, saved.success && Number(saved.meta.changes) === 1 ? "success" : "invalid");
   } catch {
     if (ciphertext) await removePending(current.account.id, ciphertext).catch(() => undefined);
-    return returnToSettings(request, "failed");
+    console.warn("Baidu OAuth callback failed", { stage });
+    return returnToSettings(request, stage);
   }
 }

@@ -120,7 +120,7 @@ export function BackupPanel() {
         const url = new URL(window.location.href);
         const result = url.searchParams.get("baidu");
         if (result) {
-          const messages: Record<string, string> = { success: "百度网盘授权成功，令牌已加密保存。", cancelled: "已取消百度网盘授权。", invalid: "授权已过期、被替换或与当前登录不匹配，请重新发起。", failed: "百度网盘授权失败，请检查应用凭据和回调地址后重试。" };
+          const messages: Record<string, string> = { success: "百度网盘授权成功，令牌已加密保存。", cancelled: "已取消百度网盘授权。", invalid: "授权已过期、被替换或与当前登录不匹配，请重新发起。", pending_read: "读取或确认本次授权请求失败。", exchange: "服务端未能从百度取得令牌。", invalid_client: "百度拒绝了应用凭据，请核对 AppKey 和 SecretKey。", invalid_grant: "百度拒绝了本次授权码，请重新授权并核对回调地址。", token_response: "百度令牌响应的格式或授权范围与预期不符。", save: "月下集未能加密或保存授权令牌。", failed: "百度网盘授权失败，请检查应用凭据和回调地址后重试。" };
           const actualProviders = Array.isArray(payload.providers) ? payload.providers as ProviderStatus[] : [];
           const confirmed = result !== "success" || actualProviders.some((item) => item.id === "baidu" && item.configured);
           setBaiduResult(confirmed && Object.hasOwn(messages, result) ? messages[result] : "未确认百度网盘授权结果。");
