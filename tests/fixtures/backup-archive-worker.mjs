@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { runBaiduBackup } from "../../app/lib/baidu-scheduled-backup.ts";
 import * as archives from "../../app/api/backup/archives/route.ts";
 import * as archive from "../../app/api/backup/archive/route.ts";
 import * as providers from "../../app/api/backup/providers/route.ts";
@@ -55,6 +57,31 @@ const testWorker = {
       if (url.pathname === "/__test/data") {
         const data = await exportSiteBackup(env.DB, env.DEFAULT_USER_ID);
         return Response.json({ data, fingerprint: await siteBackupFingerprint(data) });
+      }
+      if (url.pathname === "/__test/baidu-copy") {
+        const { now } = await request.json();
+        const calls = [];
+        const realFetch = globalThis.fetch;
+        globalThis.fetch = async (input, init) => {
+          const url = new URL(input);
+          const method = url.searchParams.get("method");
+          if (url.pathname.endsWith("/token")) return Response.json({ access_token: "test", refresh_token: "test", expires_in: 86400 });
+          if (method === "upload") {
+            calls.push("block");
+            const bytes = await init.body.get("file").arrayBuffer();
+            return Response.json({ md5: createHash("md5").update(new Uint8Array(bytes)).digest("hex") });
+          }
+          const path = init.body.get("path");
+          if (init.body.get("isdir") === "1") {
+            calls.push("mkdir");
+            return Response.json({ fs_id: 1, path });
+          }
+          calls.push(method);
+          if (method === "precreate") return Response.json({ uploadid: "test", block_list: [0] });
+          return Response.json({ path, fs_id: 2, size: Number(init.body.get("size")) });
+        };
+        try { await runBaiduBackup(env, now); } finally { globalThis.fetch = realFetch; }
+        return Response.json({ calls });
       }
       if (url.pathname === "/__test/cron") {
         const body = await request.json();
