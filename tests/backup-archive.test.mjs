@@ -441,10 +441,27 @@ test("Baidu OAuth uses the official endpoint, session-bound one-use state, and e
   assert.match(rows.results[0].token_ciphertext, /^v1\./);
   assert.ok(!rows.results[0].token_ciphertext.includes("fixtureSecret"));
   const clock = Date.now();
+  await putObject(sources[0].key, Buffer.concat([images[0], Buffer.alloc(4 * 1024 * 1024, 0x3a)]));
   assert.equal((await api("/__test/cron", { now: clock })).status, 200);
+  // An already finished split archive must migrate immediately even with a future due date.
+  const legacy = await sql(["SELECT metadata FROM external_service_credentials WHERE provider='baidu'"]);
+  const metadata = JSON.parse(legacy[0].results[0].metadata);
+  await sql([{ sql: "UPDATE external_service_credentials SET metadata=? WHERE provider='baidu'", params: [JSON.stringify({ ...metadata, completed: "daily-" + new Date(clock + 8 * 3600000).toISOString().slice(0, 10), nextDue: clock + 5 * 86400000 })] }]);
   const firstCopy = await api("/__test/baidu-copy", { now: clock });
   assert.equal(firstCopy.status, 200);
-  assert.deepEqual(firstCopy.body.calls, ["mkdir", "precreate", "locate", "block", "create"], JSON.stringify(firstCopy.body));
+  assert.deepEqual(firstCopy.body.calls, ["mkdir", "precreate", "locate", "block", "locate", "block", "create"], JSON.stringify(firstCopy.body.calls));
+  assert.match(firstCopy.body.path, /^\/apps\/备份\/月下集备份\/月下集-\d{4}-\d{2}-\d{2}\.zip$/);
+  const uploaded = new Blob([Buffer.from(firstCopy.body.archive, "base64")]);
+  const entries = await inspectBackupZip(uploaded);
+  const manifest = JSON.parse(await (await readBackupZipEntry(uploaded, entries[0])).text());
+  const hashes = new Set(manifest.assets.map(a => a.sha256));
+  assert.ok(hashes.size > 0);
+  assert.equal(entries.length, hashes.size + 1);
+  for (const image of entries.slice(1)) {
+    const hash = sha256(Buffer.from(await (await readBackupZipEntry(uploaded, image)).arrayBuffer()));
+    assert.equal(image.name, "assets/" + hash);
+    assert.ok(hashes.delete(hash));
+  }
   assert.match((await api("/api/backup/providers")).body.providers[0].backupStatus, /已保存/);
   const early = await api("/__test/baidu-copy", { now: clock + 4 * 86400000 });
   assert.deepEqual(early.body.calls, []);

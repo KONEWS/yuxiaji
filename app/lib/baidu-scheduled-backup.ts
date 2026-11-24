@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { decryptCredential, encryptCredential } from "./bangumi-account";
-import { backupUser, downloadBackupArchive, getBackupSettings, listBackupArchives, withBackupLock, type BackupEnv } from "./backup-archive";
+import { backupUser, prepareNetdiskZip, readNetdiskZipBlock, getBackupSettings, listBackupArchives, withBackupLock, type BackupEnv } from "./backup-archive";
 import { isBackupComponentEnabledValue } from "./backup-providers";
 
 const folder = "/apps/备份/月下集备份";
@@ -10,8 +10,8 @@ const blockSize = 4 * 1024 * 1024;
 const interval = 5 * 86400000;
 
 type Credential = { appKey: string; secretKey: string; accessToken: string; refreshToken: string; expiresAt: number };
-type Job = { archive: string; date: string; part: number; count: number; bounded?: boolean };
-type Metadata = { expiresAt: number; nextDue?: number; completed?: string; job?: Job; error?: string; retryAt?: number };
+type Job = { archive: string; date: string; prefix: string; size: number; hashes: string[]; count: number; uploadid?: string; missing?: number[]; failures?: number };
+type Metadata = { expiresAt: number; nextDue?: number; completed?: string; file?: { path: string; size: number; id: string }; job?: Job; error?: string; retryAt?: number };
 type Row = { token_ciphertext: string; metadata: string };
 type Reply = { errno?: number; error_code?: number; path?: string; size?: number; fs_id?: number; uploadid?: string; block_list?: number[]; return_type?: number; md5?: string };
 class BaiduFailure extends Error {
@@ -74,46 +74,65 @@ async function uploadHosts(token: string, path: string, uploadid: string) {
   return [...new Set([...hosts.slice(0, 2), fallback])];
 }
 
-// Use small standalone restore-compatible ZIPs, leaving headroom for the manifest and HTTP buffers.
-async function uploadPart(env: BackupEnv, token: string, user: string, job: Job) {
+function confirmed(result: Reply, path: string, size: number) {
+  if (!result.fs_id || result.path !== path || Number(result.size) !== size) throw new BaiduFailure("百度未确认 ZIP 路径和大小");
+  return { path, size, id: String(result.fs_id) };
+}
+
+async function advanceZip(bucket: R2Bucket, token: string, user: string, job: Job) {
+  const path = folder + "/月下集-" + job.date + ".zip";
   const file = (method: string) => apiUrl(fileApi, { method, access_token: token });
-  const zip = await downloadBackupArchive(env, user, job.archive, "zip", job.part, true);
-  job.count = Number(zip.headers.get("x-backup-parts"));
-  const bytes = new Uint8Array(await zip.arrayBuffer());
-  const hashes: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += blockSize) {
-    hashes.push(createHash("md5").update(bytes.subarray(offset, offset + blockSize)).digest("hex"));
+  if (job.hashes.length < job.count) {
+    const n = job.hashes.length;
+    const offset = n * blockSize;
+    const bytes = await readNetdiskZipBlock(bucket, user, job.prefix, offset, Math.min(blockSize, job.size - offset));
+    const hash = createHash("md5").update(bytes).digest("hex");
+    await bucket.put(job.prefix + n, bytes);
+    job.hashes.push(hash);
+    return;
   }
-  const path = folder + "/月下集-" + job.date + "-part-" + String(job.part).padStart(2, "0") + "-of-" + job.count + ".zip";
-  const pre = await call(file("precreate"), "百度预上传失败", new URLSearchParams({
-    path, isdir: "0", size: String(bytes.length), block_list: JSON.stringify(hashes), autoinit: "1", rtype: "3",
-  }));
-  if (pre.return_type === 2 && pre.path === path && pre.size === bytes.length && pre.fs_id) return;
-  if (!pre.uploadid || !Array.isArray(pre.block_list) || pre.block_list.some(n => !Number.isInteger(n) || n < 0 || n >= hashes.length)) throw new BaiduFailure("百度预上传响应缺少分片信息");
-  const hosts = pre.block_list.length ? await uploadHosts(token, path, pre.uploadid) : [];
-  for (const n of pre.block_list) {
+  const fields = { path, size: String(job.size), isdir: "0", block_list: JSON.stringify(job.hashes), rtype: "3" };
+  if (!job.uploadid) {
+    await ensureFolder(token);
+    const pre = await call(file("precreate"), "百度预上传失败", new URLSearchParams({ ...fields, autoinit: "1" }));
+    if (pre.return_type === 2) return confirmed(pre, path, job.size);
+    if (!pre.uploadid || !Array.isArray(pre.block_list) || pre.block_list.some(n => !Number.isInteger(n) || n < 0 || n >= job.count)) throw new BaiduFailure("百度预上传响应缺少分片信息");
+    job.uploadid = pre.uploadid;
+    job.missing = [...new Set(pre.block_list)];
+    return;
+  }
+  if (job.missing?.length) {
+    const n = job.missing[0];
+    const object = await bucket.get(job.prefix + n);
+    if (!object) throw new BaiduFailure("缺少已暂存的备份数据块");
     const form = new FormData();
-    form.append("file", new Blob([bytes.subarray(n * blockSize, (n + 1) * blockSize)]), "block");
+    form.append("file", new Blob([await object.arrayBuffer()]), "block");
+    const hosts = await uploadHosts(token, path, job.uploadid);
     for (const [index, host] of hosts.entries()) {
       try {
-        const result = await call(apiUrl(host, { method: "upload", access_token: token, type: "tmpfile", path, uploadid: pre.uploadid, partseq: String(n) }), "百度分片上传失败", form);
-        if (result.md5?.toLowerCase() !== hashes[n]) throw new BaiduFailure("百度分片校验失败");
+        const result = await call(apiUrl(host, { method: "upload", access_token: token, type: "tmpfile", path, uploadid: job.uploadid, partseq: String(n) }), "百度分片上传失败", form);
+        if (result.md5?.toLowerCase() !== job.hashes[n]) throw new BaiduFailure("百度分片校验失败");
         break;
       } catch (error) {
         if (index === hosts.length - 1 || (error instanceof BaiduFailure && error.code && error.code < 0)) throw error;
       }
     }
+    job.missing.shift();
+    return;
   }
-  const result = await call(file("create"), "百度合并 ZIP 失败", new URLSearchParams({
-    path, size: String(bytes.length), isdir: "0", uploadid: pre.uploadid, block_list: JSON.stringify(hashes), rtype: "3",
-  }));
-  if (!result.fs_id || result.path !== path || result.size !== bytes.length) throw new BaiduFailure("百度未确认 ZIP 路径和大小");
+  const result = await call(file("create"), "百度合并 ZIP 失败", new URLSearchParams({ ...fields, uploadid: job.uploadid }));
+  return confirmed(result, path, job.size);
+}
+
+async function clearStaging(bucket: R2Bucket, job: Job) {
+  const keys = ["fixed", "index", ...job.hashes.map((_, n) => String(n))];
+  for (let i = 0; i < keys.length; i += 512) await bucket.delete(keys.slice(i, i + 512).map(k => job.prefix + k));
 }
 
 export async function runBaiduBackup(env: BackupEnv, now = Date.now()) {
   if (!isBackupComponentEnabledValue(env.BACKUP_COMPONENT_ENABLED)) return;
   const read = () => env.DB.prepare("SELECT token_ciphertext,metadata FROM external_service_credentials WHERE provider='baidu'").first<Row>();
-  const due = (m: Metadata) => (m.retryAt ?? 0) <= now && (m.nextDue ?? 0) <= now;
+  const due = (m: Metadata) => (m.retryAt ?? 0) <= now && (!m.file || (m.nextDue ?? 0) <= now);
   const first = await read();
   if (!first || !due(JSON.parse(first.metadata))) return;
   const user = backupUser(env);
@@ -133,17 +152,18 @@ export async function runBaiduBackup(env: BackupEnv, now = Date.now()) {
       ciphertext = newCiphertext;
     };
     try {
-      const records = await listBackupArchives(env.BUCKET, user);
-      if (m.job && !records.some(a => a.id === m.job?.archive && a.status === "complete")) delete m.job;
-      if (!m.job) {
-        // At 04:00 the new daily snapshot may still be copying its images.
-        // Wait for that date instead of uploading yesterday and shortening the interval.
-        const earliest = m.nextDue ? "daily-" + new Date(m.nextDue + 8 * 3600000).toISOString().slice(0, 10) : "";
-        const archive = records.find(a => a.kind === "scheduled" && a.status === "complete" && a.id >= earliest);
+      if (!m.job?.prefix) {
+        const records = (await listBackupArchives(env.BUCKET, user)).filter(a => a.kind === "scheduled" && a.status === "complete");
+        const legacyId = m.job?.archive ?? (!m.file ? m.completed : undefined);
+        const earliest = m.file && m.nextDue ? "daily-" + new Date(m.nextDue + 8 * 3600000).toISOString().slice(0, 10) : "";
+        const archive = records.find(a => a.id === legacyId) ?? records.find(a => a.id >= earliest);
         if (!archive) return;
-        m.job = { archive: archive.id, date: archive.id.replace(/^daily-/, ""), part: 1, count: archive.downloadParts };
+        const prepared = await prepareNetdiskZip(env.BUCKET, user, archive.id);
+        m.job = { ...prepared, archive: archive.id, date: archive.id.replace(/^daily-/, ""), count: Math.ceil(prepared.size / blockSize), hashes: [] };
+        delete m.error; delete m.retryAt;
+        await save();
+        return true;
       }
-      if (!m.job.bounded) { m.job = { archive: m.job.archive, date: m.job.date, count: 0, part: 1, bounded: true }; await save(); }
       let credential: Credential = JSON.parse(await decryptCredential(ciphertext));
       if (Math.min(m.expiresAt, credential.expiresAt) <= now + 3600000) {
         credential = await refresh(credential);
@@ -151,10 +171,10 @@ export async function runBaiduBackup(env: BackupEnv, now = Date.now()) {
         await save(await encryptCredential(JSON.stringify(credential)));
       }
       const job = m.job;
-      if (job.part === 1) await ensureFolder(credential.accessToken);
-      await uploadPart(env, credential.accessToken, user, job);
-      job.part++;
-      if (job.part > job.count) {
+      const file = await advanceZip(env.BUCKET, credential.accessToken, user, job);
+      delete job.failures;
+      if (file) {
+        m.file = file;
         m.completed = job.archive;
         m.nextDue = Date.parse(job.date + "T04:00:00+08:00") + interval;
         delete m.job;
@@ -162,10 +182,24 @@ export async function runBaiduBackup(env: BackupEnv, now = Date.now()) {
       delete m.error;
       delete m.retryAt;
       await save();
+      if (file) await clearStaging(env.BUCKET, job).catch(() => {});
       return Boolean(m.job);
     } catch (error) {
       m.error = error instanceof BaiduFailure ? error.message : "网盘备份暂时失败，将自动重试";
       if (error instanceof BaiduFailure && [110,111,-6].includes(error.code ?? 0)) m.expiresAt = 0;
+      if (m.job?.uploadid && error instanceof BaiduFailure) {
+        // Re-negotiate a stale upload session after repeat failures on the same step.
+        m.job.failures = (m.job.failures ?? 0) + 1;
+        if (m.job.failures >= 3) {
+          delete m.job.uploadid;
+          delete m.job.missing;
+          delete m.job.failures;
+        }
+      }
+      if (m.job?.prefix && m.job.hashes.length < m.job.count && !(await listBackupArchives(env.BUCKET, user)).some(a => a.id === m.job?.archive)) {
+        await clearStaging(env.BUCKET, m.job);
+        delete m.job;
+      }
       m.retryAt = now + 5 * 60000;
       await save();
     }
