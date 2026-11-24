@@ -5,7 +5,7 @@ import { isBackupComponentEnabledValue } from "./backup-providers";
 
 const folder = "/apps/备份/月下集备份";
 const fileApi = "https://pan.baidu.com/rest/2.0/xpan/file";
-const sliceApi = "https://d.pcs.baidu.com/rest/2.0/pcs/superfile2";
+const locatorApi = "https://d.pcs.baidu.com/rest/2.0/pcs/file";
 const blockSize = 4 * 1024 * 1024;
 const interval = 5 * 86400000;
 
@@ -27,7 +27,7 @@ function apiUrl(base: string, values: Record<string, string>) {
 async function call(url: URL, stage: string, body: FormData | URLSearchParams): Promise<Reply> {
   try {
     const response = await fetch(url, { method: "POST", body, redirect: "manual", signal: AbortSignal.timeout(60000) });
-    const data: Reply = await response.json();
+    const data: Reply = await response.json().catch(() => { throw new BaiduFailure(stage + "：非 JSON 响应", response.status); });
     const code = data.errno ?? data.error_code;
     if (!response.ok || (code !== undefined && code !== 0)) throw new BaiduFailure(stage, code ?? response.status);
     return data;
@@ -57,6 +57,22 @@ async function ensureFolder(token: string) {
   }
 }
 
+async function uploadHosts(token: string, path: string, uploadid: string) {
+  const locator = apiUrl(locatorApi, { method: "locateupload", appid: "250528", upload_version: "2.0", access_token: token, path, uploadid });
+  const response = await fetch(locator, { redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(15000) });
+  const info = await response.json().catch(() => null) as { servers?: { server?: string }[] } | null;
+  const hosts: string[] = [];
+  for (const { server } of info?.servers ?? []) {
+    if (!server || !URL.canParse(server)) continue;
+    const url = new URL(server);
+    if (!["http:", "https:"].includes(url.protocol) || url.port || url.username || url.password ||
+        !/^(?:[a-z0-9-]+\.)*(?:baidupcs\.com|pcs\.baidu\.com)$/.test(url.hostname)) continue;
+    hosts.push("https://" + url.hostname + "/rest/2.0/pcs/superfile2");
+  }
+  if (!hosts.length) throw new BaiduFailure("百度未返回可用的上传节点", response.status);
+  return [...new Set(hosts)].slice(0, 3);
+}
+
 // Use small standalone restore-compatible ZIPs, leaving headroom for the manifest and HTTP buffers.
 async function uploadPart(env: BackupEnv, token: string, user: string, job: Job) {
   const file = (method: string) => apiUrl(fileApi, { method, access_token: token });
@@ -73,11 +89,19 @@ async function uploadPart(env: BackupEnv, token: string, user: string, job: Job)
   }));
   if (pre.return_type === 2 && pre.path === path && pre.size === bytes.length && pre.fs_id) return;
   if (!pre.uploadid || !Array.isArray(pre.block_list) || pre.block_list.some(n => !Number.isInteger(n) || n < 0 || n >= hashes.length)) throw new BaiduFailure("百度预上传响应缺少分片信息");
+  const hosts = pre.block_list.length ? await uploadHosts(token, path, pre.uploadid) : [];
   for (const n of pre.block_list) {
     const form = new FormData();
     form.append("file", new Blob([bytes.subarray(n * blockSize, (n + 1) * blockSize)]), "block");
-    const result = await call(apiUrl(sliceApi, { method: "upload", access_token: token, type: "tmpfile", path, uploadid: pre.uploadid, partseq: String(n) }), "百度分片上传失败", form);
-    if (result.md5?.toLowerCase() !== hashes[n]) throw new BaiduFailure("百度分片校验失败");
+    for (const [index, host] of hosts.entries()) {
+      try {
+        const result = await call(apiUrl(host, { method: "upload", access_token: token, type: "tmpfile", path, uploadid: pre.uploadid, partseq: String(n) }), "百度分片上传失败", form);
+        if (result.md5?.toLowerCase() !== hashes[n]) throw new BaiduFailure("百度分片校验失败");
+        break;
+      } catch (error) {
+        if (index === hosts.length - 1 || (error instanceof BaiduFailure && error.code && error.code < 0)) throw error;
+      }
+    }
   }
   const result = await call(file("create"), "百度合并 ZIP 失败", new URLSearchParams({
     path, size: String(bytes.length), isdir: "0", uploadid: pre.uploadid, block_list: JSON.stringify(hashes), rtype: "3",

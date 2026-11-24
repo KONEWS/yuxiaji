@@ -444,7 +444,7 @@ test("Baidu OAuth uses the official endpoint, session-bound one-use state, and e
   assert.equal((await api("/__test/cron", { now: clock })).status, 200);
   const firstCopy = await api("/__test/baidu-copy", { now: clock });
   assert.equal(firstCopy.status, 200);
-  assert.deepEqual(firstCopy.body.calls, ["mkdir", "precreate", "block", "create"], JSON.stringify(firstCopy.body));
+  assert.deepEqual(firstCopy.body.calls, ["mkdir", "precreate", "locate", "block", "create"], JSON.stringify(firstCopy.body));
   assert.match((await api("/api/backup/providers")).body.providers[0].backupStatus, /已保存/);
   const early = await api("/__test/baidu-copy", { now: clock + 4 * 86400000 });
   assert.deepEqual(early.body.calls, []);
