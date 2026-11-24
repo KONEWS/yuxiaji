@@ -7,7 +7,7 @@ import {
 } from "../lib/backup-client";
 import { inspectBackupZip, readBackupZipEntry } from "../lib/backup-zip";
 
-type ProviderStatus = { id: string; label: string; configured: boolean; ready: boolean };
+type ProviderStatus = { id: string; label: string; configured: boolean; ready: boolean; callbackUrl?: string; authorizationExpired?: boolean };
 type ImportPlan = { create: number; update: number; total: number };
 type RestorePreview = {
   backup: ArchiveSummary; current: BackupCounts; incoming: BackupCounts; expectedFingerprint: string;
@@ -76,6 +76,9 @@ export function BackupPanel() {
   const [preRestoreBackupId, setPreRestoreBackupId] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [providerMessage, setProviderMessage] = useState("正在读取连接状态…");
+  const [baiduAppKey, setBaiduAppKey] = useState("");
+  const [baiduSecretKey, setBaiduSecretKey] = useState("");
+  const [baiduResult, setBaiduResult] = useState("");
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [backupFile, setBackupFile] = useState<unknown>(null);
   const [importRevision, setImportRevision] = useState<string | null>(null);
@@ -114,6 +117,16 @@ export function BackupPanel() {
         if (controller.signal.aborted) return;
         setProviders(Array.isArray(payload.providers) ? payload.providers as ProviderStatus[] : []);
         setProviderMessage(payload.enabled === false ? "网站网盘连接已关闭。" : "");
+        const url = new URL(window.location.href);
+        const result = url.searchParams.get("baidu");
+        if (result) {
+          const messages: Record<string, string> = { success: "百度网盘授权成功，令牌已加密保存。", cancelled: "已取消百度网盘授权。", invalid: "授权已过期、被替换或与当前登录不匹配，请重新发起。", failed: "百度网盘授权失败，请检查应用凭据和回调地址后重试。" };
+          const actualProviders = Array.isArray(payload.providers) ? payload.providers as ProviderStatus[] : [];
+          const confirmed = result !== "success" || actualProviders.some((item) => item.id === "baidu" && item.configured);
+          setBaiduResult(confirmed && Object.hasOwn(messages, result) ? messages[result] : "未确认百度网盘授权结果。");
+          url.searchParams.delete("baidu");
+          window.history.replaceState(window.history.state, "", url);
+        }
       })
       .catch(() => {
         if (!controller.signal.aborted) setProviderMessage("暂时无法读取网盘连接状态。");
@@ -371,6 +384,20 @@ export function BackupPanel() {
     }, "import");
   }
 
+  function authorizeBaidu(reuse: boolean) {
+    setBaiduResult("");
+    void runOperation("正在打开百度网盘授权…", async (signal) => {
+      const payload = await requestBackup("/api/backup/providers/baidu", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(reuse ? { reuse: true } : { appKey: baiduAppKey.trim(), secretKey: baiduSecretKey.trim() }), signal,
+      });
+      const url = new URL(String(payload.authorizationUrl ?? ""));
+      if (url.origin !== "https://openapi.baidu.com" || url.pathname !== "/oauth/2.0/authorize") throw new Error("未收到有效的百度授权地址。");
+      setBaiduSecretKey("");
+      window.location.assign(url.href);
+    });
+  }
+
   function disconnectProvider(provider: ProviderStatus) {
     if (!window.confirm(`确认解绑 ${provider.label} 吗？将移除网站中的连接配置，保留网盘文件和现有收藏。`)) return;
     void runOperation("正在解绑网盘…", async (signal) => {
@@ -380,6 +407,7 @@ export function BackupPanel() {
       });
       const payload = await requestBackup("/api/backup/providers", { cache: "no-store", signal });
       setProviders(Array.isArray(payload.providers) ? payload.providers as ProviderStatus[] : []);
+      if (provider.id === "baidu") { setBaiduResult(""); setBaiduAppKey(""); setBaiduSecretKey(""); }
       setMessage(`${provider.label} 已解绑。`);
     });
   }
@@ -507,15 +535,30 @@ export function BackupPanel() {
         <button type="button" className="auth-link" onClick={() => downloadJson("yuexiaji-collection-before-import.json", preImportBackup)}>下载导入前快照</button>
       </div>}
 
-      <details className="backup-details">
-        <summary><span>网盘连接</span><small>查看可用状态</small></summary>
+      <details className="backup-details" id="backup-cloud" open>
+        <summary><span>网盘连接</span><small>授权与连接状态</small></summary>
         <div className="backup-details-body">
           <p>本站完整备份与网盘中的原图归档分别保存。</p>
           {providerMessage && <p>{providerMessage}</p>}
           {!providerMessage && providers.length === 0 && <p>暂无可用的网盘连接。</p>}
-          {providers.map((provider) => <div className="backup-provider" key={provider.id}>
-            <b>{provider.label}</b><span>{provider.ready ? provider.configured ? "已连接" : "未连接" : "网站上传尚未接通"}</span>
-            {provider.configured && <button type="button" className="auth-link" disabled={busy} onClick={() => disconnectProvider(provider)}>解绑</button>}
+          {baiduResult && <p className="backup-small-note" role="status">{baiduResult}</p>}
+          {providers.map((provider) => <div key={provider.id} className="backup-details-body">
+            <div className="backup-provider">
+              <b>{provider.label}</b><span>{provider.id === "baidu" ? provider.configured ? provider.authorizationExpired ? "授权已过期" : "已授权" : "未授权" : provider.configured ? "已连接" : "未连接"}</span>
+              {!provider.ready && <span>备份上传尚未接通</span>}
+              {provider.configured && <button type="button" className="auth-link" disabled={busy} onClick={() => disconnectProvider(provider)}>解绑</button>}
+            </div>
+            {provider.id === "baidu" && provider.callbackUrl && <>
+              <p>首次连接请在 <a className="auth-link" href="https://pan.baidu.com/union" target="_blank" rel="noopener noreferrer">百度网盘开放平台</a> 创建应用，将下方地址填入应用的 OAuth 回调地址。</p>
+              <label>OAuth 回调地址<input readOnly value={provider.callbackUrl} onFocus={(event) => event.target.select()} /></label>
+              {provider.configured && <div className="backup-actions"><button type="button" className="auth-primary" disabled={busy} onClick={() => authorizeBaidu(true)}>重新授权</button></div>}
+              <div className="security-form-row">
+                <label>AppKey<input value={baiduAppKey} maxLength={256} autoComplete="off" placeholder="百度应用 AppKey" disabled={busy} onChange={(event) => setBaiduAppKey(event.target.value)} /></label>
+                <label>SecretKey<input type="password" value={baiduSecretKey} maxLength={256} autoComplete="off" placeholder="百度应用 SecretKey" disabled={busy} onChange={(event) => setBaiduSecretKey(event.target.value)} /></label>
+              </div>
+              <div className="backup-actions"><button type="button" className="auth-primary" disabled={busy || !baiduAppKey.trim() || !baiduSecretKey.trim()} onClick={() => authorizeBaidu(false)}>{provider.configured ? "更换应用并授权" : "授权百度网盘"}</button></div>
+              <p className="backup-small-note">在百度官方页面完成登录和授权后自动返回。应用密钥与令牌仅在服务端加密保存；本阶段不上传文件。</p>
+            </>}
           </div>)}
         </div>
       </details>

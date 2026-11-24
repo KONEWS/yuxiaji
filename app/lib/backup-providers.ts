@@ -16,12 +16,9 @@
  *   见 docs/ 中的网盘归档约定；网站侧只在面板文案里说明。
  *
  * 当前状态（诚实标注，不虚报）：
- * - 百度（baidu）是首个网站侧适配器，但只完成了约定与状态
- *   占位：OAuth 应用注册、回调换 Token、刷新与上传 API
- *   尚未接通，uploadBackup 现在会明确报错，不会假装成功。
- *   接通前需要：在百度开放平台注册应用、把回调地址与
- *   Worker secret 配好，再实现回调与上传，届时只改
- *   baidu 适配器内部，不动核心与导出格式。
+ * - 百度（baidu）支持管理员填写应用凭据、OAuth 跳转与回调换 Token。
+ *   刷新与上传 API 仍未接通，uploadBackup 明确报错，不会假装成功。
+ *   授权逻辑独立在 baidu-backup-oauth.ts；应用和 Token 均加密保存。
  */
 
 export type BackupProviderKind = "oauth" | "external";
@@ -48,6 +45,9 @@ export type BackupProviderStatus = {
   updatedAt: string | null;
   ready: boolean;
   notReadyReason: string | null;
+  authorizationExpiresAt?: number | null;
+  authorizationExpired?: boolean;
+  callbackUrl?: string;
 };
 
 export class BackupProviderError extends Error {
@@ -69,7 +69,7 @@ export const BACKUP_PROVIDERS: BackupProvider[] = [
     kind: "oauth",
     description: "网站侧 OAuth 绑定后，可把收藏导出文件手动上传到百度网盘。",
     ready: false,
-    notReadyReason: "百度开放平台应用尚未注册，OAuth 回调与上传接口尚未接通。",
+    notReadyReason: "百度网盘授权入口已预留；自动刷新和网站上传尚未接通。",
   },
 ];
 

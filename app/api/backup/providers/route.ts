@@ -1,8 +1,9 @@
 import { env } from "cloudflare:workers";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { externalServiceCredentials } from "../../../../db/schema";
-import { guardBrowserApi } from "../../../lib/admin-auth";
+import { guardBrowserApi, requireAdminSession } from "../../../lib/admin-auth";
+import { BAIDU_PENDING_PROVIDER, baiduCallbackUrl } from "../../../lib/baidu-backup-oauth";
 import {
   BACKUP_PROVIDERS,
   getBackupProvider,
@@ -36,11 +37,18 @@ export async function GET(request: Request) {
     const byProvider = new Map(rows.map((row) => [row.provider, row]));
     const providers: BackupProviderStatus[] = BACKUP_PROVIDERS.map((provider) => {
       const row = byProvider.get(provider.id);
+      let authorizationExpiresAt: number | null = null;
+      if (provider.id === "baidu" && row) {
+        try {
+          const expiry = JSON.parse(row.metadata).expiresAt;
+          if (typeof expiry === "number" && Number.isFinite(expiry)) authorizationExpiresAt = expiry;
+        } catch { /* Old or invalid metadata is not proof of authorization. */ }
+      }
       return {
         id: provider.id,
         label: provider.label,
         kind: provider.kind,
-        configured: Boolean(row),
+        configured: provider.id === "baidu" ? authorizationExpiresAt !== null : Boolean(row),
         source: row ? "settings" : null,
         lastVerifiedAt: row?.lastVerifiedAt
           ? new Date(row.lastVerifiedAt as unknown as number).toISOString()
@@ -50,6 +58,7 @@ export async function GET(request: Request) {
           : null,
         ready: provider.ready,
         notReadyReason: provider.notReadyReason,
+        ...(provider.id === "baidu" ? { callbackUrl: baiduCallbackUrl(request), authorizationExpiresAt, authorizationExpired: authorizationExpiresAt !== null && authorizationExpiresAt <= Date.now() } : {}),
       };
     });
     return Response.json(
@@ -83,10 +92,13 @@ export async function DELETE(request: Request) {
     const providerId = typeof body.provider === "string" ? body.provider : "";
     const provider = getBackupProvider(providerId);
     if (!provider) return Response.json({ error: "未知的备份网盘" }, { status: 400 });
+    const current = await requireAdminSession(request);
+    if (current instanceof Response) return current;
     const db = getDb();
-    await db
-      .delete(externalServiceCredentials)
-      .where(eq(externalServiceCredentials.provider, providerId));
+    await db.delete(externalServiceCredentials).where(and(
+      inArray(externalServiceCredentials.provider, providerId === "baidu" ? [providerId, BAIDU_PENDING_PROVIDER] : [providerId]),
+      eq(externalServiceCredentials.adminId, current.account.id),
+    ));
     return Response.json({ ok: true, provider: providerId });
   } catch (error) {
     return Response.json(

@@ -144,6 +144,7 @@ beforeEach(async () => {
   await sql([
     "DELETE FROM user_subject_images", "DELETE FROM media_storage_links", "DELETE FROM user_subjects",
     "DELETE FROM user_devices", "DELETE FROM user_state", "DELETE FROM anime_airing_schedule",
+    "DELETE FROM external_service_credentials",
   ]);
   sources = Array.from({ length: 10 }, (_, index) => ({
     url: `/api/media-assets?v=${1700000000000 + index}`,
@@ -403,4 +404,50 @@ test("401 unique images download as two complete-manifest ZIP parts with bounded
   const invalid = await api("/__test/split-download", { ...input, part: 3 });
   assert.equal(invalid.status, 400, JSON.stringify(invalid.body));
   assert.match(invalid.body.error, /分包编号无效/);
+});
+
+test("Baidu OAuth uses the official endpoint, session-bound one-use state, and encrypted credentials without enabling uploads", async () => {
+  const path = "/api/backup/providers/baidu";
+  const body = { appKey: "fixtureKey", secretKey: "fixtureSecret" };
+  const anonymous = await request(path, { method: "POST", headers: { cookie: "", "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal(anonymous.status, 401);
+  const foreign = await request(path, { method: "POST", headers: { origin: "https://foreign.example", "content-type": "application/json" }, body: JSON.stringify(body) });
+  assert.equal(foreign.status, 403);
+  const start = await api(path, body);
+  assert.equal(start.status, 200);
+  const url = new URL(start.body.authorizationUrl);
+  assert.equal(url.origin + url.pathname, "https://openapi.baidu.com/oauth/2.0/authorize");
+  assert.equal(url.searchParams.get("client_id"), "fixtureKey");
+  assert.equal(url.searchParams.get("scope"), "basic,netdisk");
+  assert.ok(!url.href.includes("fixtureSecret"));
+  const state = url.searchParams.get("state");
+  assert.ok(state);
+  const invalid = await request(path + "?state=invalid&code=fixtureCode", { redirect: "manual" });
+  assert.equal(invalid.status, 303);
+  assert.match(invalid.headers.get("location"), /baidu=invalid/);
+  const unauthenticated = await request(path + "?state=" + state + "&code=fixtureCode", { redirect: "manual", headers: { cookie: "" } });
+  assert.equal(unauthenticated.status, 401);
+  const finish = await request(path + "?state=" + state + "&code=fixtureCode", { redirect: "manual" });
+  assert.equal(finish.status, 303);
+  assert.match(finish.headers.get("location"), /baidu=success/);
+  const status = await api("/api/backup/providers");
+  assert.equal(status.body.providers[0].configured, true);
+  assert.equal(status.body.providers[0].ready, false);
+  assert.ok(!JSON.stringify(status.body).includes("fixtureAccess"));
+  assert.ok(!JSON.stringify(status.body).includes("fixtureSecret"));
+  const [rows] = await sql(["SELECT provider,token_ciphertext FROM external_service_credentials"]);
+  assert.equal(rows.results.length, 1);
+  assert.equal(rows.results[0].provider, "baidu");
+  assert.match(rows.results[0].token_ciphertext, /^v1\./);
+  assert.ok(!rows.results[0].token_ciphertext.includes("fixtureSecret"));
+  const replay = await request(path + "?state=" + state + "&code=fixtureCode", { redirect: "manual" });
+  assert.match(replay.headers.get("location"), /baidu=invalid/);
+  const renewed = await api(path, { reuse: true });
+  assert.equal(renewed.status, 200);
+  const renewedState = new URL(renewed.body.authorizationUrl).searchParams.get("state");
+  const unlink = await request("/api/backup/providers", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "baidu" }) });
+  assert.equal(unlink.status, 200);
+  const late = await request(path + "?state=" + renewedState + "&code=fixtureCode", { redirect: "manual" });
+  assert.match(late.headers.get("location"), /baidu=invalid/);
+  assert.equal((await api("/api/backup/providers")).body.providers[0].configured, false);
 });

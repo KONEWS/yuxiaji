@@ -1,5 +1,8 @@
 import * as archives from "../../app/api/backup/archives/route.ts";
 import * as archive from "../../app/api/backup/archive/route.ts";
+import * as providers from "../../app/api/backup/providers/route.ts";
+import * as baidu from "../../app/api/backup/providers/baidu/route.ts";
+import { finishBaiduBackupOAuth } from "../../app/lib/baidu-backup-oauth.ts";
 import * as mediaAssets from "../../app/api/media-assets/route.ts";
 import * as deviceAssets from "../../app/api/device-assets/route.ts";
 import * as avatar from "../../app/api/avatar/route.ts";
@@ -107,7 +110,16 @@ const testWorker = {
         headers.set("x-test-download-parts", String(summary.downloadParts));
         return new Response(bytes, { status: response.status, headers });
       }
+      if (url.pathname === "/api/backup/providers/baidu" && request.method === "GET") {
+        return finishBaiduBackupOAuth(request, async (endpoint, init) => {
+          if (endpoint !== "https://openapi.baidu.com/oauth/2.0/token" || init.method !== "POST" || init.body.get("client_secret") !== "fixtureSecret" || init.body.get("code") !== "fixtureCode") {
+            return Response.json({ error: "invalid_grant" }, { status: 400 });
+          }
+          return Response.json({ access_token: "fixtureAccess", refresh_token: "fixtureRefresh", expires_in: 3600, scope: "basic netdisk" });
+        });
+      }
       const routes = {
+        "/api/backup/providers": providers, "/api/backup/providers/baidu": baidu,
         "/api/backup/archives": archives, "/api/backup/archive": archive,
         "/api/media-assets": mediaAssets, "/api/device-assets": deviceAssets,
         "/api/avatar": avatar, "/api/background": background,
