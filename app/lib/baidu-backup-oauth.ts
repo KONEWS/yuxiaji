@@ -134,13 +134,14 @@ export async function finishBaiduBackupOAuth(request: Request, exchange: typeof 
       return returnToSettings(request, "cancelled");
     }
     stage = "exchange";
-    const response = await exchange(TOKEN, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(10000),
-      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code", code, client_id: pending.appKey,
-        client_secret: pending.secretKey, redirect_uri: pending.redirectUri,
-      }),
+    const endpoint = new URL(TOKEN);
+    endpoint.search = new URLSearchParams({
+      grant_type: "authorization_code", code, client_id: pending.appKey,
+      client_secret: pending.secretKey, redirect_uri: pending.redirectUri,
+    }).toString();
+    const response = await exchange(endpoint, {
+      method: "GET", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000),
+      headers: { accept: "application/json" },
     });
     stage = "token_response";
     const payload = await response.json() as Record<string, unknown>;
