@@ -146,7 +146,10 @@ export async function runBaiduBackup(env: BackupEnv, now = Date.now()) {
       const records = await listBackupArchives(env.BUCKET, user);
       if (m.job && !records.some(a => a.id === m.job?.archive && a.status === "complete")) delete m.job;
       if (!m.job) {
-        const archive = records.find(a => a.kind === "scheduled" && a.status === "complete" && a.id !== m.completed);
+        // At 04:00 the new daily snapshot may still be copying its images.
+        // Wait for that date instead of uploading yesterday and shortening the interval.
+        const earliest = m.nextDue ? "daily-" + new Date(m.nextDue + 8 * 3600000).toISOString().slice(0, 10) : "";
+        const archive = records.find(a => a.kind === "scheduled" && a.status === "complete" && a.id >= earliest);
         if (!archive) return;
         m.job = { archive: archive.id, date: archive.id.replace(/^daily-/, ""), part: 1, count: archive.downloadParts };
       }
