@@ -289,15 +289,27 @@ export async function finishArchiveUpload(env: BackupEnv, user: string, id: stri
   if (record.processedAssets !== record.totalAssets) throw new SiteBackupError("还有图片尚未上传完成");
   record.status = "complete"; await saveRecord(env.BUCKET, user, record); return summary(record);
 }
-export async function downloadBackupArchive(env: BackupEnv, user: string, id: string, format: string, part = 1): Promise<Response> {
+export async function downloadBackupArchive(env: BackupEnv, user: string, id: string, format: string, part = 1, forNetdisk = false): Promise<Response> {
   const record = await readRecord(env.BUCKET, user, id);
   if (record.status !== "complete") throw new SiteBackupError("这份备份尚未完成，不能下载完整备份包");
   const manifest = encoder.encode(JSON.stringify(record.manifest));
   if (format === "json") return new Response(manifest, { headers: { "content-type": "application/json; charset=utf-8", "content-disposition": 'attachment; filename="yuexiaji-' + id + '-data.json"', "cache-control": "no-store" } });
   const allAssets = [...new Map(record.manifest.assets.map((asset) => [asset.sha256, asset])).values()];
-  const parts = Math.max(1, Math.ceil(allAssets.length / ZIP_PART_ASSETS));
+  const groups: BackupAsset[][] = [[]];
+  let groupBytes = 0;
+  for (const asset of allAssets) {
+    let group = groups[groups.length - 1];
+    if (group.length >= (forNetdisk ? 24 : ZIP_PART_ASSETS) || (forNetdisk && group.length > 0 && groupBytes + asset.size > 6 * 1024 * 1024)) {
+      group = [];
+      groups.push(group);
+      groupBytes = 0;
+    }
+    group.push(asset);
+    groupBytes += asset.size;
+  }
+  const parts = groups.length;
   if (!Number.isInteger(part) || part < 1 || part > parts) throw new SiteBackupError("备份分包编号无效");
-  const assets = allAssets.slice((part - 1) * ZIP_PART_ASSETS, part * ZIP_PART_ASSETS);
+  const assets = groups[part - 1];
   const suffix = parts > 1 ? "-part-" + String(part).padStart(2, "0") + "-of-" + parts : "";
   async function* entries(): AsyncGenerator<ZipSource> {
     yield { name: "backup.json", size: manifest.length, stream: new Blob([manifest]).stream(), crc32: nativeCrc32(manifest) };
@@ -310,7 +322,7 @@ export async function downloadBackupArchive(env: BackupEnv, user: string, id: st
   const entrySize = (name: string, size: number) => size + 30 + 16 + 46 + encoder.encode(name).length * 2;
   const size = 22 + entrySize("backup.json", manifest.length) + assets.reduce((total, asset) => total + entrySize("assets/" + asset.sha256, asset.size), 0);
   if (size > 0xfffffff0) throw new SiteBackupError("完整备份包超过 4 GB，请联系维护拆分导出");
-  return new Response(createBackupZip(entries()), { headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="yuexiaji-' + id + suffix + '.zip"', "content-length": String(size), "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+  return new Response(createBackupZip(entries()), { headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="yuexiaji-' + id + suffix + '.zip"', "content-length": String(size), "x-backup-parts": String(parts), "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 }
 export async function previewArchiveRestore(env: BackupEnv, user: string, id: string) {
   const record = await readRecord(env.BUCKET, user, id);

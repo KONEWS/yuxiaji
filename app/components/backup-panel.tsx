@@ -186,6 +186,20 @@ export function BackupPanel() {
     })), rememberArchive, signal);
   }
 
+  function advanceNetdisk() {
+    void runOperation("正在检查网盘备份…", async signal => {
+      let more: boolean;
+      do {
+        const step = await requestBackup("/api/backup/providers", { method: "POST", signal });
+        const status = await requestBackup("/api/backup/providers", { cache: "no-store", signal });
+        const providers = status.providers as ProviderStatus[];
+        setProviders(providers);
+        setMessage(providers.find(p => p.id === "baidu")?.backupStatus || "网盘状态已刷新");
+        more = step.more === true;
+      } while (more && !signal.aborted);
+    });
+  }
+
   function refreshHistory() {
     void runOperation("正在刷新备份记录…", async (signal) => {
       await refreshArchives(signal);
@@ -551,7 +565,7 @@ export function BackupPanel() {
             {provider.id === "baidu" && provider.callbackUrl && <>
               <p>首次连接请在 <a className="auth-link" href="https://pan.baidu.com/union" target="_blank" rel="noopener noreferrer">百度网盘开放平台</a> 创建应用，将下方地址填入应用的 OAuth 回调地址。</p>
               <label>OAuth 回调地址<input readOnly value={provider.callbackUrl} onFocus={(event) => event.target.select()} /></label>
-              {provider.configured && <div className="backup-actions"><button type="button" className="auth-primary" disabled={busy} onClick={() => authorizeBaidu(true)}>重新授权</button></div>}
+              {provider.configured && <div className="backup-actions"><button type="button" className="backup-secondary" disabled={busy || !settings?.enabled} onClick={advanceNetdisk}>执行到期网盘备份</button><button type="button" className="auth-primary" disabled={busy} onClick={() => authorizeBaidu(true)}>重新授权</button></div>}
               <div className="security-form-row">
                 <label>AppKey<input value={baiduAppKey} maxLength={256} autoComplete="off" placeholder="百度应用 AppKey" disabled={busy} onChange={(event) => setBaiduAppKey(event.target.value)} /></label>
                 <label>SecretKey<input type="password" value={baiduSecretKey} maxLength={256} autoComplete="off" placeholder="百度应用 SecretKey" disabled={busy} onChange={(event) => setBaiduSecretKey(event.target.value)} /></label>
