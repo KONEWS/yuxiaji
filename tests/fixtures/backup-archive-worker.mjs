@@ -61,6 +61,8 @@ const testWorker = {
       if (url.pathname === "/__test/baidu-copy") {
         const { now } = await request.json();
         const calls = [];
+        const blocks = [];
+        let file;
         const realFetch = globalThis.fetch;
         globalThis.fetch = async (input, init) => {
           const url = new URL(input);
@@ -74,6 +76,7 @@ const testWorker = {
             if (url.hostname !== "test.baidupcs.com") throw new Error("unexpected test upload host");
             calls.push("block");
             const bytes = await init.body.get("file").arrayBuffer();
+            blocks[Number(url.searchParams.get("partseq"))] = bytes;
             return Response.json({ md5: createHash("md5").update(new Uint8Array(bytes)).digest("hex") });
           }
           const path = init.body.get("path");
@@ -82,11 +85,12 @@ const testWorker = {
             return Response.json({ fs_id: 1, path });
           }
           calls.push(method);
-          if (method === "precreate") return Response.json({ uploadid: "test", block_list: [0] });
-          return Response.json({ path, fs_id: 2, size: Number(init.body.get("size")) });
+          if (method === "precreate") return Response.json({ uploadid: "test", block_list: JSON.parse(init.body.get("block_list")).map((_, n) => n) });
+          file = { path, bytes: await new Blob(blocks).arrayBuffer() };
+          return Response.json({ path, fs_id: 2, size: file.bytes.byteLength });
         };
-        try { await runBaiduBackup(env, now); } finally { globalThis.fetch = realFetch; }
-        return Response.json({ calls });
+        try { for (let i = 0; i < 100 && await runBaiduBackup(env, now); i++) { /* resume each checkpoint */ } } finally { globalThis.fetch = realFetch; }
+        return Response.json({ calls, path: file?.path, archive: file && Buffer.from(file.bytes).toString("base64") });
       }
       if (url.pathname === "/__test/cron") {
         const body = await request.json();

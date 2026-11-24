@@ -1,6 +1,6 @@
 import { crc32 as nativeCrc32 } from "node:zlib";
 import { exportSiteBackup, parseSiteBackup, restoreSiteBackup, siteBackupFingerprint, SiteBackupError, type SiteBackup } from "./site-backup-data";
-import { createBackupZip, type ZipSource } from "./backup-zip";
+import { createBackupZip, createZipTemplate, type ZipRangeIndex, type ZipSource } from "./backup-zip";
 import { putVersionedImage } from "./versioned-image";
 
 export type ArchiveKind = "manual" | "scheduled" | "before-restore" | "uploaded";
@@ -289,23 +289,64 @@ export async function finishArchiveUpload(env: BackupEnv, user: string, id: stri
   if (record.processedAssets !== record.totalAssets) throw new SiteBackupError("还有图片尚未上传完成");
   record.status = "complete"; await saveRecord(env.BUCKET, user, record); return summary(record);
 }
-export async function downloadBackupArchive(env: BackupEnv, user: string, id: string, format: string, part = 1, forNetdisk = false): Promise<Response> {
+export async function prepareNetdiskZip(bucket: R2Bucket, user: string, archive: string) {
+  const record = await readRecord(bucket, user, archive);
+  if (record.status !== "complete") throw new Error("备份尚未完成");
+  const manifest = encoder.encode(JSON.stringify(record.manifest));
+  const { fixed, index } = createZipTemplate(manifest, nativeCrc32(manifest), record.manifest.assets);
+  const prefix = await root(user) + "netdisk/" + archive + "/";
+  await bucket.put(prefix + "fixed", await fixed.arrayBuffer());
+  await bucket.put(prefix + "index", JSON.stringify(index));
+  return { prefix, size: index.size };
+}
+
+export async function readNetdiskZipBlock(bucket: R2Bucket, user: string, prefix: string, start: number, length: number) {
+  const index = await readJson<ZipRangeIndex>(bucket, prefix + "index");
+  if (!index || length <= 0 || start < 0 || start + length > index.size) throw new Error("无效的备份区间");
+  const end = start + length;
+  const output = new Uint8Array(length);
+  const gaps: { at: number; length: number }[] = [];
+  const reads: { key: string; at: number; offset: number; length: number }[] = [];
+  const blobs = await root(user) + "blobs/";
+  let position = start, precedingImageBytes = 0;
+  for (const image of index.images) {
+    if (image.offset >= end) break;
+    precedingImageBytes += Math.min(image.size, Math.max(0, start - image.offset));
+    const left = Math.max(start, image.offset), right = Math.min(end, image.offset + image.size);
+    if (right <= left) continue;
+    if (left > position) gaps.push({ at: position - start, length: left - position });
+    reads.push({ key: blobs + image.sha256, at: left - start, offset: left - image.offset, length: right - left });
+    position = right;
+  }
+  if (position < end) gaps.push({ at: position - start, length: end - position });
+  async function range(key: string, offset: number, length: number) {
+    const object = await bucket.get(key, { range: { offset, length } });
+    if (!object) throw new Error("备份文件缺失");
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    if (bytes.length !== length) throw new Error("备份区间读取不完整");
+    return bytes;
+  }
+  if (gaps.length) {
+    const fixed = await range(prefix + "fixed", start - precedingImageBytes, gaps.reduce((sum, g) => sum + g.length, 0));
+    let cursor = 0;
+    for (const gap of gaps) { output.set(fixed.subarray(cursor, cursor + gap.length), gap.at); cursor += gap.length; }
+  }
+  for (let i = 0; i < reads.length; i += 6) {
+    await Promise.all(reads.slice(i, i + 6).map(async r => output.set(await range(r.key, r.offset, r.length), r.at)));
+  }
+  return output;
+}
+
+export async function downloadBackupArchive(env: BackupEnv, user: string, id: string, format: string, part = 1): Promise<Response> {
   const record = await readRecord(env.BUCKET, user, id);
   if (record.status !== "complete") throw new SiteBackupError("这份备份尚未完成，不能下载完整备份包");
   const manifest = encoder.encode(JSON.stringify(record.manifest));
   if (format === "json") return new Response(manifest, { headers: { "content-type": "application/json; charset=utf-8", "content-disposition": 'attachment; filename="yuexiaji-' + id + '-data.json"', "cache-control": "no-store" } });
   const allAssets = [...new Map(record.manifest.assets.map((asset) => [asset.sha256, asset])).values()];
   const groups: BackupAsset[][] = [[]];
-  let groupBytes = 0;
   for (const asset of allAssets) {
-    let group = groups[groups.length - 1];
-    if (group.length >= (forNetdisk ? 24 : ZIP_PART_ASSETS) || (forNetdisk && group.length > 0 && groupBytes + asset.size > 6 * 1024 * 1024)) {
-      group = [];
-      groups.push(group);
-      groupBytes = 0;
-    }
-    group.push(asset);
-    groupBytes += asset.size;
+    if (groups[groups.length - 1].length >= ZIP_PART_ASSETS) groups.push([]);
+    groups[groups.length - 1].push(asset);
   }
   const parts = groups.length;
   if (!Number.isInteger(part) || part < 1 || part > parts) throw new SiteBackupError("备份分包编号无效");

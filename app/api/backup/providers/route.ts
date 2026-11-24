@@ -45,8 +45,10 @@ export async function GET(request: Request) {
           const m = JSON.parse(row.metadata);
           const expiry = m.expiresAt;
           if (m.error) backupStatus = m.error;
-          else if (m.job) backupStatus = !m.job.count ? "正在准备网盘备份" : `正在上传第 ${m.job.part} / ${m.job.count} 个 ZIP 分包`;
-          else if (m.completed) backupStatus = `已保存 ${m.completed.replace(/^daily-/, "")} 的完整备份`;
+          else if (m.job?.uploadid) backupStatus = m.job.missing?.length ? `正在上传完整 ZIP（已传 ${m.job.count - m.job.missing.length}/${m.job.count} 块）` : "正在合并完整 ZIP";
+          else if (m.job?.hashes) backupStatus = `正在准备完整 ZIP（${m.job.hashes.length}/${m.job.count} 块）`;
+          else if (m.file) backupStatus = `已保存 ${m.file.path.split("/").pop()}`;
+          else if (m.job || m.completed) backupStatus = "等待生成单文件备份";
           else backupStatus = "等待首次自动备份";
           if (typeof expiry === "number" && Number.isFinite(expiry)) authorizationExpiresAt = expiry;
         } catch { /* Old or invalid metadata is not proof of authorization. */ }

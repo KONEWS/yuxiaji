@@ -24,6 +24,56 @@ function checkSize(name: string, size: number) {
 }
 function header(size: number) { const bytes = new Uint8Array(size); return { bytes, view: new DataView(bytes.buffer) }; }
 
+function centralHeader(name: Uint8Array, size: number, crc: number, start: number, flags: number) {
+  const central = header(46 + name.length);
+  central.view.setUint32(0, 0x02014b50, true); central.view.setUint16(4, 20, true); central.view.setUint16(6, 20, true);
+  central.view.setUint16(8, flags, true); central.view.setUint32(16, crc, true);
+  central.view.setUint32(20, size, true); central.view.setUint32(24, size, true);
+  central.view.setUint16(28, name.length, true); central.view.setUint32(42, start, true); central.bytes.set(name, 46);
+  return central.bytes;
+}
+function endRecord(count: number, centralOffset: number, size: number) {
+  if (size + 22 > MAX_ARCHIVE) throw new Error("备份包超过 4 GB");
+  const end = header(22); end.view.setUint32(0, 0x06054b50, true);
+  end.view.setUint16(8, count, true); end.view.setUint16(10, count, true);
+  end.view.setUint32(12, size - centralOffset, true); end.view.setUint32(16, centralOffset, true);
+  return end.bytes;
+}
+
+export type ZipRangeIndex = { size: number; images: { offset: number; size: number; sha256: string }[] };
+
+// Store the manifest and ZIP structures contiguously. Content-addressed images fill
+// the holes, so any transfer block can be reconstructed without reading earlier images.
+export function createZipTemplate(manifest: Uint8Array, manifestCrc: number, assets: { sha256: string; size: number; crc32: number }[]) {
+  const fixed: Uint8Array[] = [];
+  const directory: Uint8Array[] = [];
+  const images: ZipRangeIndex["images"] = [];
+  let offset = 0;
+  function entry(name: string, size: number, crc: number) {
+    checkName(name); checkSize(name, size);
+    const bytes = encoder.encode(name);
+    const local = header(30 + bytes.length);
+    local.view.setUint32(0, 0x04034b50, true); local.view.setUint16(4, 20, true);
+    local.view.setUint32(14, crc, true); local.view.setUint32(18, size, true); local.view.setUint32(22, size, true);
+    local.view.setUint16(26, bytes.length, true); local.bytes.set(bytes, 30);
+    directory.push(centralHeader(bytes, size, crc, offset, 0));
+    fixed.push(local.bytes);
+    offset += local.bytes.length;
+  }
+  entry("backup.json", manifest.length, manifestCrc);
+  fixed.push(manifest); offset += manifest.length;
+  for (const asset of new Map(assets.map(a => [a.sha256, a])).values()) {
+    entry("assets/" + asset.sha256, asset.size, asset.crc32);
+    images.push({ offset, size: asset.size, sha256: asset.sha256 });
+    offset += asset.size;
+  }
+  if (directory.length > MAX_FILES) throw new Error("备份包文件数量超限");
+  const centralOffset = offset;
+  for (const bytes of directory) { fixed.push(bytes); offset += bytes.length; }
+  fixed.push(endRecord(directory.length, centralOffset, offset));
+  return { fixed: new Blob(fixed as BlobPart[]), index: { size: offset + 22, images } };
+}
+
 export function createBackupZip(entries: AsyncIterable<ZipSource> | Iterable<ZipSource>): ReadableStream<Uint8Array> {
   async function* generate() {
     const directory: Uint8Array[] = [];
@@ -57,21 +107,12 @@ export function createBackupZip(entries: AsyncIterable<ZipSource> | Iterable<Zip
       const descriptor = header(16); descriptor.view.setUint32(0, 0x08074b50, true);
       descriptor.view.setUint32(4, crc, true); descriptor.view.setUint32(8, read, true); descriptor.view.setUint32(12, read, true);
       yield descriptor.bytes; offset += 16;
-      const central = header(46 + name.length);
-      central.view.setUint32(0, 0x02014b50, true); central.view.setUint16(4, 20, true); central.view.setUint16(6, 20, true);
-      central.view.setUint16(8, 8, true); central.view.setUint32(16, crc, true);
-      central.view.setUint32(20, read, true); central.view.setUint32(24, read, true);
-      central.view.setUint16(28, name.length, true); central.view.setUint32(42, start, true); central.bytes.set(name, 46);
-      directory.push(central.bytes);
+      directory.push(centralHeader(name, read, crc, start, 8));
     }
     if (!names.has("backup.json")) throw new Error("备份包缺少数据清单");
     const centralOffset = offset;
     for (const bytes of directory) { offset += bytes.length; yield bytes; }
-    if (offset + 22 > MAX_ARCHIVE) throw new Error("备份包超过 4 GB");
-    const end = header(22); end.view.setUint32(0, 0x06054b50, true);
-    end.view.setUint16(8, names.size, true); end.view.setUint16(10, names.size, true);
-    end.view.setUint32(12, offset - centralOffset, true); end.view.setUint32(16, centralOffset, true);
-    yield end.bytes;
+    yield endRecord(names.size, centralOffset, offset);
   }
   const iterator = generate();
   return new ReadableStream({
