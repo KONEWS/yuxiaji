@@ -1,3 +1,4 @@
+import { splitLegacyTags } from "./site-backup-data";
 import { asc, eq, getTableColumns } from "drizzle-orm";
 import { getDb } from "../../db";
 import { mediaStorageLinks, userSubjectImages, userSubjects } from "../../db/schema";
@@ -63,7 +64,7 @@ export async function buildCollectionBackup(
         if (Array.isArray(parsed)) tags.push(...parsed.map(String).filter(Boolean));
       } catch {
         // Legacy tags may be comma-separated instead of JSON.
-        tags.push(...(source || "").split(/[,，、]/).map((tag) => tag.trim()).filter(Boolean));
+        tags.push(...splitLegacyTags(source || ""));
       }
     }
     let metadata: Record<string, unknown> = {};

@@ -68,7 +68,7 @@ export const BACKUP_PROVIDERS: BackupProvider[] = [
     id: "baidu",
     label: "百度网盘",
     kind: "oauth",
-    description: "每五天自动保存完整备份至我的应用数据／备份／月下集备份。",
+    description: "每五天自动保存完整备份至应用目录下的「月下集备份」文件夹。",
     ready: true,
     notReadyReason: null,
   },

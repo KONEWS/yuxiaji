@@ -47,34 +47,21 @@ async function uploadRequest(form) {
   // Serialize explicitly so the Worker receives the exact multipart boundary.
   const request = new Request("http://localhost/api/agent/gallery/upload", { method: "POST", body: form });
   const body = Buffer.from(await request.arrayBuffer());
-  // Read the server's early rejection even if it closes the upload connection.
-  // Undici may report ECONNRESET instead of delivering that HTTP response.
+  // Chunked transfer makes the Worker enforce the limit on bytes received. A
+  // known oversized Content-Length lets it reply while the proxy is still writing.
   return new Promise((resolve, reject) => {
-    let responded = false;
     const outgoing = httpRequest({
       hostname: worker.address, port: worker.port, path: "/api/agent/gallery/upload",
-      method: "POST", headers: { "content-type": request.headers.get("content-type"), "content-length": body.length, connection: "close" },
+      method: "POST", headers: { "content-type": request.headers.get("content-type"), "transfer-encoding": "chunked", connection: "close" },
     }, (incoming) => {
-      responded = true;
       const chunks = [];
       incoming.on("data", (chunk) => chunks.push(chunk));
       incoming.on("error", reject);
       incoming.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: incoming.statusCode, headers: incoming.headers })));
     });
     outgoing.setTimeout(15000, () => outgoing.destroy(new Error("Upload probe timed out")));
-    outgoing.on("error", (error) => { if (!responded) reject(error); });
-    // Pace the upload so the local proxy can forward an early response instead
-    // of continuing to write megabytes into a connection the Worker closed.
-    let offset = 0;
-    const sendChunk = () => {
-      if (responded || outgoing.destroyed) return;
-      const end = Math.min(offset + 64 * 1024, body.length);
-      outgoing.write(body.subarray(offset, end));
-      offset = end;
-      if (offset === body.length) outgoing.end();
-      else setTimeout(sendChunk, 1);
-    };
-    sendChunk();
+    outgoing.on("error", reject);
+    outgoing.end(body);
   });
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // @ts-expect-error Node's TypeScript loader requires a source extension.
-import { backupCrc32, createBackupZip, inspectBackupZip, readBackupZipEntry } from "../app/lib/backup-zip.ts";
+import { backupCrc32, createBackupZip, createZipTemplate, inspectBackupZip, readBackupZipEntry } from "../app/lib/backup-zip.ts";
 const encoder = new TextEncoder();
 function stream(bytes: Uint8Array, width = 2) {
   let offset = 0;
@@ -48,4 +48,43 @@ test("ZIP central directory cannot point two files at an overlapping local entry
   const second = directory + 46 + view.getUint16(directory + 28, true);
   view.setUint32(second + 42, 0, true);
   await assert.rejects(inspectBackupZip(new Blob([bytes])), /重叠/);
+});
+
+test("the Netdisk ZIP64 directory and its final image remain readable beyond 4 GiB", async () => {
+  const bigImage = new Blob([new Uint8Array(8 * 1024 * 1024)]);
+  const lastImage = encoder.encode("last asset");
+  const assets = Array.from({ length: 513 }, (_, i) => ({
+    sha256: i.toString(16).padStart(64, "0"), size: i === 512 ? lastImage.length : bigImage.size,
+    crc32: i === 512 ? backupCrc32(lastImage) : 0,
+  }));
+  const manifest = encoder.encode("{}");
+  const { fixed, index } = createZipTemplate(manifest, backupCrc32(manifest), assets);
+  // Node 22 truncates in-memory Blob.slice offsets above uint32. Model a
+  // browser File using individually sliceable chunks at actual 64-bit positions.
+  const spans: { offset: number; blob: Blob }[] = [];
+  let virtual = 0, compact = 0;
+  for (const [i, image] of index.images.entries()) {
+    const headerSize = image.offset - virtual;
+    spans.push({ offset: virtual, blob: fixed.slice(compact, compact + headerSize) });
+    spans.push({ offset: image.offset, blob: i === 512 ? new Blob([lastImage]) : bigImage });
+    compact += headerSize;
+    virtual = image.offset + image.size;
+  }
+  spans.push({ offset: virtual, blob: fixed.slice(compact) });
+  const file = {
+    size: index.size,
+    slice(start: number, end = index.size) {
+      return new Blob(spans.filter(span => span.offset < end && span.offset + span.blob.size > start)
+        .map(span => span.blob.slice(Math.max(0, start - span.offset), end - span.offset)));
+    },
+  } as Blob;
+  assert.ok(index.images[512].offset > 2 ** 32);
+  assert.equal(virtual + fixed.size - compact, index.size);
+  const entries = await inspectBackupZip(file);
+  assert.equal(entries.length, 514);
+  assert.equal(entries[513].dataOffset, index.images[512].offset);
+  assert.equal(await (await readBackupZipEntry(file, entries[513])).text(), "last asset");
+  const footer = new DataView(await file.slice(index.size - 98).arrayBuffer());
+  assert.equal(footer.getUint32(0, true), 0x06064b50);
+  assert.equal(footer.getBigUint64(64, true), BigInt(index.size - 98));
 });

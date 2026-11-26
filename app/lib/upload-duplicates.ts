@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { getDb } from "../../db";
-import { agentOperations, userSubjectImages, userSubjects } from "../../db/schema";
+import { agentOperations, restoredCoverHashes, userSubjectImages, userSubjects } from "../../db/schema";
 import { mediaAssetExists } from "./media-storage";
 
 export type UploadDuplicate = { existingId: number | null; existingImageId?: number; existingAssetId?: number; image: string };
@@ -18,7 +18,7 @@ export async function findUploadDuplicate(userKey: string, hash: string, targetI
     eq(agentOperations.action, "upload"), gte(agentOperations.statusCode, 200), lt(agentOperations.statusCode, 300),
     sql`json_extract(${receipt}, '$.imageHash') = ${hash}`,
   );
-  const [galleries, covers] = await Promise.all([
+  const [galleries, covers, restored] = await Promise.all([
     db.select({ existingId: userSubjectImages.subjectId, existingImageId: userSubjectImages.id, image: userSubjectImages.thumbnail })
       .from(userSubjectImages).innerJoin(userSubjects, and(eq(userSubjects.id, userSubjectImages.subjectId), eq(userSubjects.userKey, userKey), eq(userSubjects.type, "visual")))
       .where(and(eq(userSubjectImages.userKey, userKey), eq(userSubjectImages.imageHash, hash)))
@@ -26,8 +26,12 @@ export async function findUploadDuplicate(userKey: string, hash: string, targetI
     db.selectDistinct({ existingId: userSubjects.id, image: userSubjects.image }).from(agentOperations)
       .innerJoin(userSubjects, and(eq(userSubjects.userKey, userKey), eq(userSubjects.image, receiptImage)))
       .where(operationScope).orderBy(sql`CASE WHEN ${userSubjects.id} = ${targetId} THEN 0 ELSE 1 END`, asc(userSubjects.id)),
+    db.selectDistinct({ existingId: userSubjects.id, image: userSubjects.image }).from(restoredCoverHashes)
+      .innerJoin(userSubjects, and(eq(userSubjects.userKey, restoredCoverHashes.userKey), eq(userSubjects.image, restoredCoverHashes.image)))
+      .where(and(eq(restoredCoverHashes.userKey, userKey), eq(restoredCoverHashes.sourceHash, hash)))
+      .orderBy(asc(userSubjects.id)),
   ]);
-  const matches = [...galleries, ...covers.filter((row): row is { existingId: number; image: string } => Boolean(row.image))];
+  const matches = [...galleries, ...[...covers, ...restored].filter((row): row is { existingId: number; image: string } => Boolean(row.image))];
   matches.sort((a, b) => Number(b.existingId === targetId) - Number(a.existingId === targetId));
   for (const match of matches) {
     if (await mediaAssetExists(match.image, userKey)) return match;

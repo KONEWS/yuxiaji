@@ -1,3 +1,7 @@
+export function splitLegacyTags(value: string): string[] {
+  return value.split(/[,，、]/).map(tag => tag.trim()).filter(Boolean);
+}
+
 /** Business-data snapshots. Credentials and authentication tables are never read. */
 export const SITE_BACKUP_FORMAT = "yuexiaji-site-backup";
 export const SITE_BACKUP_VERSION = 1;
@@ -11,6 +15,7 @@ type Column = {
   min?: number;
   max?: number;
   json?: "array" | "object";
+  legacyTags?: boolean;
   url?: "absolute" | "asset" | "reference" | "sources";
   values?: readonly Cell[];
 };
@@ -32,9 +37,9 @@ const TABLE_COLUMNS = {
     subject_id: nullable(integer()), title: text(), jp: text(), note: text(100_000),
     progress: integer(), total: integer(), status: text(), kind: text(), score: nullable(integer(0, 10)),
     next: nullable(text()), image: nullable(url()), global_score: nullable(number(0, 10)), source: text(),
-    collection: text(), tags: json("array"), music_album: text(), music_artist: text(), lyricist: text(), composer: text(),
+    collection: text(), tags: { ...json("array"), legacyTags: true }, music_album: text(), music_artist: text(), lyricist: text(), composer: text(),
     anime_song: flag, visual_subtype: text(), video_subtype: text(), thumbnail: url(), source_url: sources(),
-    pixiv_pid: text(), author: text(), twitter_source: { ...text(500), url: "reference" }, character_tags: json("array"), metadata: json("object"), updated_at: timestamp,
+    pixiv_pid: text(), author: text(), twitter_source: { ...text(500), url: "reference" }, character_tags: { ...json("array"), legacyTags: true }, metadata: json("object"), updated_at: timestamp,
   },
   user_subject_images: {
     id: integer(1), subject_id: integer(1), thumbnail: url(), source_url: sources(), image_hash: text(128),
@@ -51,7 +56,7 @@ const TABLE_COLUMNS = {
     id: integer(1), name: text(), category: text(), sub_category: text(), status: text(), price: nullable(number()), currency: text(),
     purchase_date: nullable(text()), receipt_image: nullable(url()), cover_image: nullable(url()),
     cover_position_x: integer(0, 100), cover_position_y: integer(0, 100), cover_zoom: integer(25, 500),
-    cover_offset_x: number(-50, 50), cover_offset_y: number(-50, 50), tags: json("array"), rating: nullable(integer(0, 10)),
+    cover_offset_x: number(-50, 50), cover_offset_y: number(-50, 50), tags: { ...json("array"), legacyTags: true }, rating: nullable(integer(0, 10)),
     review: text(100_000), updated_at: timestamp,
   },
   user_state: {
@@ -137,7 +142,7 @@ function validateSourceUrls(value: string, context: string): void {
   for (const line of value.split(/\r\n|\r|\n/)) validateBackupUrl(line.trim(), context);
 }
 
-function readCell(value: unknown, spec: Column, context: string): Cell {
+function readCell(value: unknown, spec: Column, context: string, normalizeTags: boolean): Cell {
   if (value === null && spec.nullable) return null;
   if (spec.kind === "text") {
     if (typeof value !== "string" || value.length > (spec.max ?? 16_384)) throw new SiteBackupError(`${context} 字符串无效或过长`);
@@ -149,7 +154,12 @@ function readCell(value: unknown, spec: Column, context: string): Cell {
     } else if (spec.url) validateBackupUrl(value, context, spec.url === "absolute");
     if (spec.json) {
       let parsed: unknown;
-      try { parsed = JSON.parse(value); } catch { throw new SiteBackupError(`${context} 不是有效 JSON`); }
+      try { parsed = JSON.parse(value); } catch {
+        if (!spec.legacyTags || /^\s*[[{"]/.test(value)) throw new SiteBackupError(context + " 不是有效 JSON");
+        // Preserve the stored spelling for fingerprints and D1 compare-and-swap guards.
+        const tags = splitLegacyTags(value);
+        return normalizeTags ? JSON.stringify(tags) : value;
+      }
       if (spec.json === "array" ? !Array.isArray(parsed) : !record(parsed)) throw new SiteBackupError(`${context} JSON 类型不正确`);
       checkJson(parsed, context);
     }
@@ -204,7 +214,7 @@ function validateRelations(tables: SiteBackup["tables"]) {
 }
 
 /** Reject unknown tables/columns and malformed relationships before any write. */
-export function parseSiteBackup(value: unknown): SiteBackup {
+export function parseSiteBackup(value: unknown, normalizeTags = false): SiteBackup {
   if (!record(value)) throw new SiteBackupError("全站备份必须是 JSON 对象");
   exactKeys(value, ["format", "version", "exportedAt", "tables", "counts"], "全站备份");
   if (value.format !== SITE_BACKUP_FORMAT || value.version !== SITE_BACKUP_VERSION) throw new SiteBackupError("不支持的全站备份格式或版本");
@@ -226,7 +236,7 @@ export function parseSiteBackup(value: unknown): SiteBackup {
       if (!record(item)) throw new SiteBackupError(`${context} 格式无效`);
       exactKeys(item, keys, context);
       const row: SiteBackupRow = {};
-      for (const key of keys) row[key] = readCell(item[key], specs[key], `${context}.${key}`);
+      for (const key of keys) row[key] = readCell(item[key], specs[key], `${context}.${key}`, normalizeTags);
       if (Object.hasOwn(row, "id")) {
         if (ids.has(row.id)) throw new SiteBackupError(`${table} 包含重复 ID`);
         ids.add(row.id);
@@ -329,8 +339,8 @@ export function siteBackupWriteError(error: unknown): SiteBackupError {
 }
 
 /** Exact replacement, including deletions, in one all-or-nothing D1 batch. */
-export async function restoreSiteBackup(db: D1Database, userKey: string, value: SiteBackup, expectedCurrent?: SiteBackup): Promise<void> {
-  const backup = parseSiteBackup(value);
+export async function restoreSiteBackup(db: D1Database, userKey: string, value: SiteBackup, expectedCurrent?: SiteBackup, coverHashes?: Array<{ image: string; sourceHash: string }>): Promise<void> {
+  const backup = parseSiteBackup(value, true);
   const current = expectedCurrent ? parseSiteBackup(expectedCurrent) : await exportSiteBackup(db, userKey);
   const statements = siteBackupGuardStatements(db, userKey, current);
   // Refuse malformed cross-owner foreign keys instead of cascading into them.
@@ -349,6 +359,12 @@ export async function restoreSiteBackup(db: D1Database, userKey: string, value: 
     for (const chunk of chunks(backup.tables[table])) {
       const statement = db.prepare(`INSERT INTO ${quote(table)} (${insertFields.map(quote).join(",")}) SELECT ${values.join(",")} FROM json_each(?)`);
       statements.push(owned(table) ? statement.bind(userKey, chunk) : statement.bind(chunk));
+    }
+  }
+  if (coverHashes) {
+    statements.push(db.prepare("DELETE FROM restored_cover_hashes WHERE user_key=?").bind(userKey));
+    for (const chunk of chunks(coverHashes)) {
+      statements.push(db.prepare("INSERT OR IGNORE INTO restored_cover_hashes(user_key,image,source_hash) SELECT ?,json_extract(value,'$.image'),json_extract(value,'$.sourceHash') FROM json_each(?)").bind(userKey, chunk));
     }
   }
   try { await db.batch(statements); } catch (error) { throw siteBackupWriteError(error); }

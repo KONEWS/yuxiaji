@@ -452,3 +452,21 @@ test("invalid legacy storage links fail validation without silently skipping the
   assert.equal(result.status, 400, JSON.stringify(result.body));
   assert.deepEqual(businessContent(await snapshot()), businessContent(before));
 });
+
+test("legacy plain tags survive snapshot guards and restore as separate JSON arrays", async () => {
+  await sql(["UPDATE user_subjects SET tags='电影, 音 乐，旧、经典', character_tags='甲，乙' WHERE id=10",
+    "UPDATE user_devices SET tags='设备，便携' WHERE id=401"]);
+  const before = await snapshot();
+  const legacy = await collection();
+  const restored = await api("/__test/site/restore", { backup: before, expectedCurrent: before });
+  assert.equal(restored.status, 200, JSON.stringify(restored.body));
+  const after = await snapshot();
+  assert.deepEqual(JSON.parse(after.tables.user_subjects[0].tags), ["电影","音 乐","旧","经典"]);
+  assert.deepEqual(JSON.parse(after.tables.user_subjects[0].character_tags), ["甲","乙"]);
+  assert.deepEqual(JSON.parse(after.tables.user_devices[0].tags), ["设备","便携"]);
+  await sql(["UPDATE user_subjects SET tags='电影，音乐' WHERE id=10"]);
+  const preview = await api("/api/backup/import", { mode: "preview", backup: legacy });
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  const imported = await api("/api/backup/import", { mode: "import", confirmed: true, expectedRevision: preview.body.revision, backup: legacy });
+  assert.equal(imported.status, 200, JSON.stringify(imported.body));
+});
