@@ -1,3 +1,5 @@
+import { uploadMusicCover } from "../../app/lib/mcp-music-cover.ts";
+import { createChatGPTContentRequest } from "../../app/lib/agent-auth.ts";
 import { createHash } from "node:crypto";
 import { runBaiduBackup } from "../../app/lib/baidu-scheduled-backup.ts";
 import * as archives from "../../app/api/backup/archives/route.ts";
@@ -58,8 +60,22 @@ const testWorker = {
         const data = await exportSiteBackup(env.DB, env.DEFAULT_USER_ID);
         return Response.json({ data, fingerprint: await siteBackupFingerprint(data) });
       }
+      if (url.pathname === "/__test/cover-upload") {
+        const { input, key } = await request.json();
+        const file = { file_id: key, download_url: "https://fixture.oaiusercontent.com/cover", mime_type: "image/png" };
+        const internal = createChatGPTContentRequest(env.DEFAULT_USER_ID, request.url, { method: "POST", body: JSON.stringify({
+          id: 30, expectedTitle: "音乐", idempotencyKey: key, file,
+        }) });
+        const original = globalThis.fetch;
+        globalThis.fetch = async () => new Response(new Uint8Array(input), { headers: { "content-type": "image/png" } });
+        try {
+          // Keep display bytes distinct from the original upload digest.
+          return await uploadMusicCover(internal, async bytes => new Uint8Array([...bytes, 0]));
+        } finally { globalThis.fetch = original; }
+      }
       if (url.pathname === "/__test/baidu-copy") {
-        const { now } = await request.json();
+        const { now, rapid, appName } = await request.json();
+        let rapidFile;
         const calls = [];
         const blocks = [];
         let file;
@@ -79,17 +95,31 @@ const testWorker = {
             blocks[Number(url.searchParams.get("partseq"))] = bytes;
             return Response.json({ md5: createHash("md5").update(new Uint8Array(bytes)).digest("hex") });
           }
+          if (method === "search") {
+            calls.push("search");
+            const split = rapidFile.path.lastIndexOf("/");
+            if (init.method !== "GET" || url.searchParams.get("dir") !== rapidFile.path.slice(0, split)
+                || url.searchParams.get("key") !== rapidFile.path.slice(split + 1)) throw new Error("incorrect lookup");
+            return Response.json({ list: [rapid === "wrong-size" ? { ...rapidFile, size: 1 } : rapidFile] });
+          }
           const path = init.body.get("path");
           if (init.body.get("isdir") === "1") {
             calls.push("mkdir");
             return Response.json({ fs_id: 1, path });
           }
           calls.push(method);
+          if (method === "precreate" && rapid) {
+            rapidFile = { path, size: Number(init.body.get("size")), fs_id: "123456789012345678" };
+            if (rapid === "nested") {
+              return new Response(JSON.stringify({ return_type: 2, info: rapidFile }).replace('"123456789012345678"', "123456789012345678"));
+            }
+            return Response.json({ return_type: 2 });
+          }
           if (method === "precreate") return Response.json({ uploadid: "test", block_list: JSON.parse(init.body.get("block_list")).map((_, n) => n) });
           file = { path, bytes: await new Blob(blocks).arrayBuffer() };
           return Response.json({ path, fs_id: 2, size: file.bytes.byteLength });
         };
-        try { for (let i = 0; i < 100 && await runBaiduBackup(env, now); i++) { /* resume each checkpoint */ } } finally { globalThis.fetch = realFetch; }
+        try { for (let i = 0; i < 100 && await runBaiduBackup({ ...env, BAIDU_BACKUP_APP_NAME: appName }, now); i++) { /* resume each checkpoint */ } } finally { globalThis.fetch = realFetch; }
         return Response.json({ calls, path: file?.path, archive: file && Buffer.from(file.bytes).toString("base64") });
       }
       if (url.pathname === "/__test/cron") {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
-  archiveDownloadLinks, archiveFromPayload, backupFailure, completeArchive, inspectBackupZipParts, requestBackup,
+  archiveDownloadLinks, archiveFromPayload, backupFailure, BackupApiError, completeArchive, completeRestore, inspectBackupZipParts, requestBackup,
   type ArchiveSettings, type ArchiveSummary, type BackupCounts,
 } from "../lib/backup-client";
 import { inspectBackupZip, readBackupZipEntry } from "../lib/backup-zip";
@@ -62,6 +62,7 @@ export function BackupPanel() {
   const previewRegion = useRef<HTMLDivElement>(null);
   const operation = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  const restoreCheckpoint = useRef<{ key: string; id: string } | null>(null);
   const [busyLabel, setBusyLabel] = useState("");
   const [message, setMessage] = useState("");
   const [isError, setIsError] = useState(false);
@@ -180,10 +181,12 @@ export function BackupPanel() {
   }
 
   async function finishArchive(backup: ArchiveSummary, signal: AbortSignal) {
-    return completeArchive(backup, async (id) => archiveFromPayload(await requestBackup("/api/backup/archives", {
+    const advance = async (id: string) => archiveFromPayload(await requestBackup("/api/backup/archives", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "continue", id }), signal,
-    })), rememberArchive, signal);
+    }));
+    const initial = backup.status === "failed" ? await advance(backup.id) : backup;
+    return completeArchive(initial, advance, rememberArchive, signal);
   }
 
   function advanceNetdisk() {
@@ -220,11 +223,7 @@ export function BackupPanel() {
 
   function resumeArchive(backup: ArchiveSummary) {
     void runOperation("正在继续备份…", async (signal) => {
-      const resumed = backup.status === "failed" ? archiveFromPayload(await requestBackup("/api/backup/archives", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "continue", id: backup.id }), signal,
-      })) : backup;
-      await finishArchive(resumed, signal);
+      await finishArchive(backup, signal);
       setMessage("完整备份已保存，可下载 ZIP。");
     });
   }
@@ -300,7 +299,10 @@ export function BackupPanel() {
   function restoreArchive() {
     if (!restorePreview || !restoreConfirmed || operation.current) return;
     const selected = restorePreview;
-    setPreRestoreBackupId(null);
+    const key = "yuexiaji.restore." + selected.backup.id + "." + selected.expectedFingerprint;
+    let resumeId = restoreCheckpoint.current?.key === key ? restoreCheckpoint.current.id : undefined;
+    try { resumeId ??= sessionStorage.getItem(key) || undefined; } catch { /* In-memory resume remains available. */ }
+    setPreRestoreBackupId(resumeId ?? null);
     void runOperation("正在准备恢复，并保存恢复前备份…", async (signal) => {
       const body = {
         action: "restore", id: selected.backup.id, confirmed: true,
@@ -310,36 +312,23 @@ export function BackupPanel() {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...body, ...(preRestoreId ? { preRestoreBackupId: preRestoreId } : {}) }), signal,
       });
-      let payload = await restoreRequest();
-      let beforeId = typeof payload.preRestoreBackupId === "string" ? payload.preRestoreBackupId : undefined;
-      if (beforeId) setPreRestoreBackupId(beforeId);
-      if (payload.needsPreparation === true) {
-        const before = archiveFromPayload(payload);
-        await finishArchive(before, signal);
-        beforeId = before.id;
-        setPreRestoreBackupId(beforeId);
-        setMessage("恢复前备份已保存，正在准备恢复图片…");
-        payload = await restoreRequest(beforeId);
+      const forget = () => {
+        restoreCheckpoint.current = null;
+        try { sessionStorage.removeItem(key); } catch { /* Storage is optional. */ }
+      };
+      try {
+        await completeRestore(resumeId, restoreRequest, async before => {
+          await finishArchive(before, signal);
+        }, id => {
+          restoreCheckpoint.current = { key, id };
+          try { sessionStorage.setItem(key, id); } catch { /* Keep the in-memory checkpoint. */ }
+          setPreRestoreBackupId(id);
+        }, (processed, total) => setMessage("正在准备恢复图片 " + processed + " / " + total + "，当前数据尚未替换…"), signal);
+      } catch (error) {
+        if (error instanceof BackupApiError && error.payload.code === "backup_not_found") forget();
+        throw error;
       }
-      let previousProgress = -1;
-      let unchanged = 0;
-      let steps = 0;
-      while (payload.needsMore === true) {
-        signal.throwIfAborted();
-        if (!beforeId) throw new Error("未确认恢复前备份，已停止操作，请刷新核对。");
-        const processed = Number(payload.processedAssets);
-        const total = Number(payload.totalAssets);
-        if (!Number.isSafeInteger(processed) || !Number.isSafeInteger(total) || processed < 0 || total < processed) {
-          throw new Error("恢复进度异常，已停止操作，请刷新核对。");
-        }
-        unchanged = processed <= previousProgress ? unchanged + 1 : 0;
-        if (unchanged >= 3 || steps >= 2000) throw new Error("恢复进度暂未推进，已停止等待，请刷新核对后重新预览。");
-        previousProgress = processed;
-        setMessage(`正在准备恢复图片 ${processed} / ${total}，当前数据尚未替换…`);
-        payload = await restoreRequest(beforeId);
-        steps += 1;
-      }
-      if (payload.needsPreparation === true || payload.ok !== true) throw new Error("尚未确认恢复完成，请刷新核对。");
+      forget();
       setRestorePreview(null);
       setRestoreConfirmed(false);
       setMessage("恢复完成，正在刷新月下集…");
@@ -571,7 +560,7 @@ export function BackupPanel() {
                 <label>SecretKey<input type="password" value={baiduSecretKey} maxLength={256} autoComplete="off" placeholder="百度应用 SecretKey" disabled={busy} onChange={(event) => setBaiduSecretKey(event.target.value)} /></label>
               </div>
               <div className="backup-actions"><button type="button" className="auth-primary" disabled={busy || !baiduAppKey.trim() || !baiduSecretKey.trim()} onClick={() => authorizeBaidu(false)}>{provider.configured ? "更换应用并授权" : "授权百度网盘"}</button></div>
-              <p className="backup-small-note">在百度官方页面完成登录和授权后自动返回。开启自动备份后，每 5 天保存一份完整 ZIP 到百度网盘「我的应用数据／备份／月下集备份」。</p>
+              <p className="backup-small-note">在百度官方页面完成登录和授权后自动返回。开启自动备份后，每 5 天保存一份完整 ZIP 到百度网盘应用目录下的「月下集备份」文件夹。</p>
             </>}
           </div>)}
         </div>

@@ -1,3 +1,4 @@
+import { backupCoverHashes, parseCoverHashes, type CoverHash } from "./backup-cover-hashes";
 import { crc32 as nativeCrc32 } from "node:zlib";
 import { exportSiteBackup, parseSiteBackup, restoreSiteBackup, siteBackupFingerprint, SiteBackupError, type SiteBackup } from "./site-backup-data";
 import { createBackupZip, createZipTemplate, type ZipRangeIndex, type ZipSource } from "./backup-zip";
@@ -12,11 +13,11 @@ export type ArchiveSummary = {
 export type BackupSettings = { enabled: boolean; retentionDays: number; scheduleLabel: string };
 type AssetKind = "media" | "device" | "avatar" | "background";
 export type BackupAsset = { kind: AssetKind; purpose?: "cover" | "receipt"; urls: string[]; sha256: string; size: number; contentType: string; crc32: number };
-export type ArchiveManifest = { format: "yuexiaji-archive"; version: 1; createdAt: string; data: SiteBackup; dataSha256: string; assets: BackupAsset[] };
+export type ArchiveManifest = { format: "yuexiaji-archive"; version: 1; createdAt: string; data: SiteBackup; dataSha256: string; coverHashes?: CoverHash[]; assets: BackupAsset[] };
 type AssetSource = { kind: AssetKind; purpose?: "cover" | "receipt"; urls: string[]; key: string; fallbackKey?: string };
 type ArchiveRecord = ArchiveSummary & { manifest: ArchiveManifest; sources: AssetSource[]; _etag?: string; failureCount?: number };
 type RestoreProgress = { _etag?: string; archiveId: string; preRestoreBackupId: string; fingerprint: string; processed: number; urls: Record<string, string>; backgroundVersion?: number; status: "preparing" | "committing" | "complete" };
-export type BackupEnv = { DB: D1Database; BUCKET: R2Bucket; DEFAULT_USER_ID?: string; BACKUP_COMPONENT_ENABLED?: string; assertBackupLease?: () => Promise<void> };
+export type BackupEnv = { DB: D1Database; BUCKET: R2Bucket; DEFAULT_USER_ID?: string; BACKUP_COMPONENT_ENABLED?: string; BAIDU_BACKUP_APP_NAME?: string; assertBackupLease?: () => Promise<void> };
 const MAX_MANIFEST_BYTES = 20 * 1024 * 1024;
 const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 const MAX_ASSETS = 25000;
@@ -164,10 +165,11 @@ export async function createBackupArchive(env: BackupEnv, user: string, kind: Ar
   const existing = await readJson<ArchiveRecord>(env.BUCKET, await recordKey(user, archiveId));
   if (existing) return summary(existing);
   const data = await exportSiteBackup(env.DB, user); const sources = await collectSources(data, user);
+  const coverHashes = await backupCoverHashes(env.DB, user, data);
   const createdAt = new Date().toISOString();
   const record: ArchiveRecord = { id: archiveId, kind, createdAt, status: sources.length ? "pending" : "complete", counts: data.counts,
     assetCount: 0, assetBytes: 0, downloadParts: 1, processedAssets: 0, totalAssets: sources.length, sources,
-    manifest: { format: "yuexiaji-archive", version: 1, createdAt, data, dataSha256: await siteBackupFingerprint(data), assets: [] } };
+    manifest: { format: "yuexiaji-archive", version: 1, createdAt, data, dataSha256: await siteBackupFingerprint(data), ...(coverHashes.length ? { coverHashes } : {}), assets: [] } };
   await saveRecord(env.BUCKET, user, record); return summary(record);
 }
 function detectImage(bytes: Uint8Array): string | null {
@@ -221,7 +223,7 @@ export async function parseArchiveManifest(value: unknown, user: string): Promis
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new SiteBackupError("备份清单格式无效");
   const raw = value as Record<string, unknown>;
   if (raw.format !== "yuexiaji-archive" || raw.version !== 1 || typeof raw.createdAt !== "string" || !Number.isFinite(Date.parse(raw.createdAt))) throw new SiteBackupError("不支持的备份包格式或版本");
-  if (Object.keys(raw).some((key) => !["format", "version", "createdAt", "data", "dataSha256", "assets"].includes(key))) throw new SiteBackupError("备份清单包含未知字段");
+  if (Object.keys(raw).some((key) => !["format", "version", "createdAt", "data", "dataSha256", "assets", "coverHashes"].includes(key))) throw new SiteBackupError("备份清单包含未知字段");
   const data = parseSiteBackup(raw.data);
   if (raw.dataSha256 !== await siteBackupFingerprint(data)) throw new SiteBackupError("备份数据校验失败");
   if (!Array.isArray(raw.assets) || raw.assets.length > MAX_ASSETS) throw new SiteBackupError("备份图片清单无效");
@@ -242,7 +244,7 @@ export async function parseArchiveManifest(value: unknown, user: string): Promis
     return { kind: asset.kind, ...(asset.purpose ? { purpose: asset.purpose } : {}), urls: [...asset.urls], sha256: asset.sha256, size: asset.size, contentType: asset.contentType, crc32: asset.crc32 };
   });
   if (seen.size !== expectedUrls.size) throw new SiteBackupError("备份包缺少本站图片，不能作为完整备份导入");
-  const manifest: ArchiveManifest = { format: "yuexiaji-archive", version: 1, createdAt: raw.createdAt, data, dataSha256: raw.dataSha256 as string, assets };
+  const manifest: ArchiveManifest = { format: "yuexiaji-archive", version: 1, createdAt: raw.createdAt, data, dataSha256: raw.dataSha256 as string, ...(raw.coverHashes === undefined ? {} : { coverHashes: parseCoverHashes(raw.coverHashes, data) }), assets };
   if (encoder.encode(JSON.stringify(manifest)).length > MAX_MANIFEST_BYTES) throw new SiteBackupError("备份数据清单超过 20 MiB");
   return manifest;
 }
@@ -360,9 +362,9 @@ export async function downloadBackupArchive(env: BackupEnv, user: string, id: st
       yield { name: "assets/" + asset.sha256, size: asset.size, stream: object.body, crc32: asset.crc32 };
     }
   }
+  // A browser download part has at most 400 bounded assets, so its headers use ZIP32.
   const entrySize = (name: string, size: number) => size + 30 + 16 + 46 + encoder.encode(name).length * 2;
   const size = 22 + entrySize("backup.json", manifest.length) + assets.reduce((total, asset) => total + entrySize("assets/" + asset.sha256, asset.size), 0);
-  if (size > 0xfffffff0) throw new SiteBackupError("完整备份包超过 4 GB，请联系维护拆分导出");
   return new Response(createBackupZip(entries()), { headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="yuexiaji-' + id + suffix + '.zip"', "content-length": String(size), "x-backup-parts": String(parts), "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 }
 export async function previewArchiveRestore(env: BackupEnv, user: string, id: string) {
@@ -390,7 +392,7 @@ function rewriteUrls(data: SiteBackup, urls: Record<string, string>, backgroundV
   }
   const restored = visit(data) as SiteBackup;
   if (backgroundVersion !== undefined) for (const row of restored.tables.user_state) row.background_version = backgroundVersion;
-  return parseSiteBackup(restored);
+  return parseSiteBackup(restored, true);
 }
 async function saveRestoreProgress(env: BackupEnv, key: string, progress: RestoreProgress) {
   await env.assertBackupLease?.();
@@ -409,7 +411,11 @@ export async function restoreBackupArchive(env: BackupEnv, user: string, id: str
     return { needsPreparation: true, backup, preRestoreBackupId: backup.id };
   }
   const safety = await readRecord(env.BUCKET, user, preRestoreBackupId);
-  if (safety.kind !== "before-restore" || safety.status !== "complete" || safety.manifest.dataSha256 !== fingerprint) throw new SiteBackupError("恢复前备份尚未完成或不属于本次操作", "backup_conflict", 409);
+  if (safety.kind !== "before-restore" || safety.manifest.dataSha256 !== fingerprint) throw new SiteBackupError("恢复前备份尚未完成或不属于本次操作", "backup_conflict", 409);
+  if (safety.status !== "complete") {
+    if (currentHash !== fingerprint) throw new SiteBackupError("预览后数据发生了变化，请重新预览", "backup_conflict", 409);
+    return { needsPreparation: true, backup: summary(safety), preRestoreBackupId };
+  }
   const progressKey = await root(user) + "restores/" + preRestoreBackupId + ".json";
   let progress = await readJson<RestoreProgress>(env.BUCKET, progressKey);
   if (progress && (progress.archiveId !== id || progress.fingerprint !== fingerprint)) throw new SiteBackupError("恢复任务不匹配");
@@ -459,8 +465,10 @@ export async function restoreBackupArchive(env: BackupEnv, user: string, id: str
   await saveRestoreProgress(env, progressKey, progress);
   if (progress.processed < assets.length) return { needsMore: true, preRestoreBackupId, processedAssets: progress.processed, totalAssets: assets.length };
   const applied = rewriteUrls(record.manifest.data, progress.urls, progress.backgroundVersion);
+  const originalHashes = record.manifest.coverHashes ?? await backupCoverHashes(env.DB, user, record.manifest.data);
+  const restoredHashes = originalHashes.flatMap(({ image, sourceHash }) => progress.urls[image] ? [{ image: progress.urls[image], sourceHash }] : []);
   progress.status = "committing"; await saveRestoreProgress(env, progressKey, progress);
-  try { await env.assertBackupLease?.(); await restoreSiteBackup(env.DB, user, applied, safety.manifest.data); }
+  try { await env.assertBackupLease?.(); await restoreSiteBackup(env.DB, user, applied, safety.manifest.data, restoredHashes); }
   catch (error) {
     if (error instanceof SiteBackupError && error.rolledBack) { progress.status = "preparing"; await saveRestoreProgress(env, progressKey, progress).catch(() => null); }
     throw error;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ArchiveSummary } from "../app/lib/backup-client";
 // @ts-expect-error Node's TypeScript loader requires an explicit extension.
-import { BackupApiError, archiveDownloadLinks, archiveDownloadUrl, backupFailure, completeArchive, inspectBackupZipParts, requestBackup, validateBackupZipEntries } from "../app/lib/backup-client.ts";
+import { BackupApiError, archiveDownloadLinks, archiveDownloadUrl, backupFailure, completeArchive, completeRestore, inspectBackupZipParts, requestBackup, validateBackupZipEntries } from "../app/lib/backup-client.ts";
 
 const snapshot = { format: "yuexiaji-collection-backup", subjects: [{ title: "导入前的收藏" }] };
 const responseFrom = (body: unknown, status = 200): typeof fetch => async () => Response.json(body, { status });
@@ -211,4 +211,29 @@ test("single ZIP backups still use the same inventory validation", async () => {
   assert.equal(result.assets.size, 1);
   assert.equal(result.assets.get(hash)!.file, file);
   assert.deepEqual(result.manifest, manifest);
+});
+
+test("25,000 assets complete through backup and a resumed restoration in batches of eight", async () => {
+  const total = 25000;
+  let processed = 0;
+  await completeArchive({ ...archive(), totalAssets: total }, async () => {
+    processed = Math.min(total, processed + 8);
+    return { ...archive(processed, processed === total ? "complete" : "pending"), totalAssets: total };
+  }, () => {});
+  assert.equal(processed, total);
+  const initial = { ...archive(), totalAssets: total };
+  let checkpoint = "";
+  let calls = 0;
+  await assert.rejects(completeRestore(undefined, async () => {
+    if (++calls === 2) throw new Error("interrupted");
+    return { preRestoreBackupId: initial.id, needsPreparation: true, backup: initial };
+  }, async () => {}, id => { checkpoint = id; }, () => {}, new AbortController().signal), /interrupted/);
+  processed = 0;
+  await completeRestore(checkpoint, async id => {
+    assert.equal(id, initial.id);
+    processed = Math.min(total, processed + 8);
+    return processed === total ? { ok: true, restored: {}, preRestoreBackupId: id } :
+      { needsMore: true, preRestoreBackupId: id, processedAssets: processed, totalAssets: total };
+  }, async () => assert.fail(), () => assert.fail(), () => {}, new AbortController().signal);
+  assert.equal(processed, total);
 });

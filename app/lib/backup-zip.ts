@@ -4,7 +4,7 @@ export type ZipEntry = { name: string; size: number; crc32: number; offset: numb
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const MAX_FILES = 30000;
-const MAX_ARCHIVE = 0xfffffff0;
+const ZIP32_SENTINEL = 0xffffffff;
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   let crc = value;
   for (let n = 0; n < 8; n++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
@@ -25,18 +25,43 @@ function checkSize(name: string, size: number) {
 function header(size: number) { const bytes = new Uint8Array(size); return { bytes, view: new DataView(bytes.buffer) }; }
 
 function centralHeader(name: Uint8Array, size: number, crc: number, start: number, flags: number) {
-  const central = header(46 + name.length);
-  central.view.setUint32(0, 0x02014b50, true); central.view.setUint16(4, 20, true); central.view.setUint16(6, 20, true);
+  const largeOffset = start >= ZIP32_SENTINEL;
+  const central = header(46 + name.length + (largeOffset ? 12 : 0));
+  central.view.setUint32(0, 0x02014b50, true); central.view.setUint16(4, 20, true); central.view.setUint16(6, largeOffset ? 45 : 20, true);
   central.view.setUint16(8, flags, true); central.view.setUint32(16, crc, true);
   central.view.setUint32(20, size, true); central.view.setUint32(24, size, true);
-  central.view.setUint16(28, name.length, true); central.view.setUint32(42, start, true); central.bytes.set(name, 46);
+  central.view.setUint16(28, name.length, true); central.view.setUint32(42, largeOffset ? ZIP32_SENTINEL : start, true); central.bytes.set(name, 46);
+  if (largeOffset) {
+    const extra = 46 + name.length;
+    central.view.setUint16(30, 12, true);
+    central.view.setUint16(extra, 1, true);
+    central.view.setUint16(extra + 2, 8, true);
+    central.view.setBigUint64(extra + 4, BigInt(start), true);
+  }
   return central.bytes;
 }
 function endRecord(count: number, centralOffset: number, size: number) {
-  if (size + 22 > MAX_ARCHIVE) throw new Error("备份包超过 4 GB");
-  const end = header(22); end.view.setUint32(0, 0x06054b50, true);
-  end.view.setUint16(8, count, true); end.view.setUint16(10, count, true);
-  end.view.setUint32(12, size - centralOffset, true); end.view.setUint32(16, centralOffset, true);
+  const zip64 = centralOffset >= ZIP32_SENTINEL || size + 22 >= ZIP32_SENTINEL;
+  const classic = zip64 ? 76 : 0;
+  const end = header(classic + 22);
+  if (zip64) {
+    end.view.setUint32(0, 0x06064b50, true);
+    end.view.setBigUint64(4, BigInt(44), true);
+    end.view.setUint16(12, 45, true);
+    end.view.setUint16(14, 45, true);
+    end.view.setBigUint64(24, BigInt(count), true);
+    end.view.setBigUint64(32, BigInt(count), true);
+    end.view.setBigUint64(40, BigInt(size - centralOffset), true);
+    end.view.setBigUint64(48, BigInt(centralOffset), true);
+    end.view.setUint32(56, 0x07064b50, true);
+    end.view.setBigUint64(64, BigInt(size), true);
+    end.view.setUint32(72, 1, true);
+  }
+  end.view.setUint32(classic, 0x06054b50, true);
+  end.view.setUint16(classic + 8, count, true);
+  end.view.setUint16(classic + 10, count, true);
+  end.view.setUint32(classic + 12, size - centralOffset, true);
+  end.view.setUint32(classic + 16, zip64 ? ZIP32_SENTINEL : centralOffset, true);
   return end.bytes;
 }
 
@@ -53,7 +78,7 @@ export function createZipTemplate(manifest: Uint8Array, manifestCrc: number, ass
     checkName(name); checkSize(name, size);
     const bytes = encoder.encode(name);
     const local = header(30 + bytes.length);
-    local.view.setUint32(0, 0x04034b50, true); local.view.setUint16(4, 20, true);
+    local.view.setUint32(0, 0x04034b50, true); local.view.setUint16(4, offset >= ZIP32_SENTINEL ? 45 : 20, true);
     local.view.setUint32(14, crc, true); local.view.setUint32(18, size, true); local.view.setUint32(22, size, true);
     local.view.setUint16(26, bytes.length, true); local.bytes.set(bytes, 30);
     directory.push(centralHeader(bytes, size, crc, offset, 0));
@@ -70,8 +95,9 @@ export function createZipTemplate(manifest: Uint8Array, manifestCrc: number, ass
   if (directory.length > MAX_FILES) throw new Error("备份包文件数量超限");
   const centralOffset = offset;
   for (const bytes of directory) { fixed.push(bytes); offset += bytes.length; }
-  fixed.push(endRecord(directory.length, centralOffset, offset));
-  return { fixed: new Blob(fixed as BlobPart[]), index: { size: offset + 22, images } };
+  const end = endRecord(directory.length, centralOffset, offset);
+  fixed.push(end);
+  return { fixed: new Blob(fixed as BlobPart[]), index: { size: offset + end.length, images } };
 }
 
 export function createBackupZip(entries: AsyncIterable<ZipSource> | Iterable<ZipSource>): ReadableStream<Uint8Array> {
@@ -86,9 +112,8 @@ export function createBackupZip(entries: AsyncIterable<ZipSource> | Iterable<Zip
       names.add(entry.name);
       const name = encoder.encode(entry.name);
       const start = offset;
-      if (offset + entry.size + name.length + 46 > MAX_ARCHIVE) throw new Error("备份包超过 4 GB，请分开保存");
       const local = header(30 + name.length);
-      local.view.setUint32(0, 0x04034b50, true); local.view.setUint16(4, 20, true);
+      local.view.setUint32(0, 0x04034b50, true); local.view.setUint16(4, offset >= ZIP32_SENTINEL ? 45 : 20, true);
       local.view.setUint16(6, 8, true); local.view.setUint16(26, name.length, true); local.bytes.set(name, 30);
       yield local.bytes; offset += local.bytes.length;
       const reader = entry.stream.getReader();
@@ -123,7 +148,7 @@ export function createBackupZip(entries: AsyncIterable<ZipSource> | Iterable<Zip
 
 /** Read only the directory and small headers. Individual images are checked when uploaded. */
 export async function inspectBackupZip(file: Blob): Promise<ZipEntry[]> {
-  if (file.size < 22 || file.size > MAX_ARCHIVE) throw new Error("不是受支持的 ZIP 备份文件");
+  if (file.size < 22) throw new Error("不是受支持的 ZIP 备份文件");
   const tailOffset = Math.max(0, file.size - 65557);
   const tail = new DataView(await file.slice(tailOffset).arrayBuffer());
   let end = -1;
@@ -132,8 +157,25 @@ export async function inspectBackupZip(file: Blob): Promise<ZipEntry[]> {
   }
   if (end < 0 || tail.getUint16(end + 4, true) || tail.getUint16(end + 6, true)) throw new Error("不支持分卷 ZIP 备份");
   const count = tail.getUint16(end + 10, true);
-  const size = tail.getUint32(end + 12, true); const offset = tail.getUint32(end + 16, true);
-  if (!count || count > MAX_FILES || tail.getUint16(end + 8, true) !== count || offset + size !== tailOffset + end || size > MAX_FILES * 256) throw new Error("备份 ZIP 目录损坏");
+  const size = tail.getUint32(end + 12, true);
+  let offset = tail.getUint32(end + 16, true);
+  let directoryEnd = tailOffset + end;
+  if (offset === ZIP32_SENTINEL) {
+    // Single-disk archives with bounded entry sizes only need 64-bit offsets.
+    const base = directoryEnd - 76;
+    if (base < 0) throw new Error("备份 ZIP64 目录截断");
+    const records = new DataView(await file.slice(base, directoryEnd).arrayBuffer());
+    if (records.getUint32(0, true) !== 0x06064b50 || records.getBigUint64(4, true) !== BigInt(44)
+        || records.getUint32(16, true) !== 0 || records.getUint32(20, true) !== 0
+        || records.getBigUint64(24, true) !== BigInt(count) || records.getBigUint64(32, true) !== BigInt(count)
+        || records.getBigUint64(40, true) !== BigInt(size) || records.getUint32(56, true) !== 0x07064b50
+        || records.getUint32(60, true) !== 0 || records.getBigUint64(64, true) !== BigInt(base)
+        || records.getUint32(72, true) !== 1) throw new Error("备份 ZIP64 目录损坏");
+    offset = Number(records.getBigUint64(48, true));
+    directoryEnd = base;
+  }
+  if (!Number.isSafeInteger(offset) || !count || count > MAX_FILES || tail.getUint16(end + 8, true) !== count
+      || size > MAX_FILES * 256 || offset !== directoryEnd - size) throw new Error("备份 ZIP 目录损坏");
   const directory = new DataView(await file.slice(offset, offset + size).arrayBuffer());
   const entries: ZipEntry[] = []; const names = new Set<string>();
   let position = 0; let lastEnd = 0;
@@ -142,13 +184,18 @@ export async function inspectBackupZip(file: Blob): Promise<ZipEntry[]> {
     const flags = directory.getUint16(position + 8, true); const method = directory.getUint16(position + 10, true);
     const compressed = directory.getUint32(position + 20, true); const bytes = directory.getUint32(position + 24, true);
     const nameLength = directory.getUint16(position + 28, true); const extra = directory.getUint16(position + 30, true); const comment = directory.getUint16(position + 32, true);
-    const localOffset = directory.getUint32(position + 42, true); const crc32 = directory.getUint32(position + 16, true);
+    let localOffset = directory.getUint32(position + 42, true); const crc32 = directory.getUint32(position + 16, true);
     if ((flags & ~0x808) || method !== 0 || compressed !== bytes || directory.getUint16(position + 34, true)) throw new Error("仅支持月下集导出的未加密 ZIP 备份");
     if (position + 46 + nameLength + extra + comment > size) throw new Error("备份 ZIP 目录截断");
     const name = decoder.decode(new Uint8Array(directory.buffer, position + 46, nameLength));
     checkName(name); checkSize(name, bytes);
     if (names.has(name)) throw new Error("备份 ZIP 包含重复文件"); names.add(name);
-    if (localOffset < lastEnd || localOffset + 30 > offset) throw new Error("备份 ZIP 文件区间重叠");
+    if (localOffset === ZIP32_SENTINEL) {
+      const field = position + 46 + nameLength;
+      if (extra !== 12 || directory.getUint16(field, true) !== 1 || directory.getUint16(field + 2, true) !== 8) throw new Error("备份 ZIP64 文件偏移无效");
+      localOffset = Number(directory.getBigUint64(field + 4, true));
+    }
+    if (!Number.isSafeInteger(localOffset) || localOffset < lastEnd || localOffset + 30 > offset) throw new Error("备份 ZIP 文件区间重叠");
     const local = new DataView(await file.slice(localOffset, localOffset + 30).arrayBuffer());
     if (local.getUint32(0, true) !== 0x04034b50 || local.getUint16(6, true) !== flags || local.getUint16(8, true) !== 0 || local.getUint16(26, true) !== nameLength) throw new Error("备份 ZIP 文件头不一致");
     const localName = decoder.decode(await file.slice(localOffset + 30, localOffset + 30 + nameLength).arrayBuffer());

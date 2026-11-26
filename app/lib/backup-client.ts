@@ -101,21 +101,63 @@ export async function completeArchive(
 ): Promise<ArchiveSummary> {
   let current = initial;
   let unchanged = 0;
-  let steps = 0;
   onProgress(current);
   while (current.status === "pending") {
     signal?.throwIfAborted();
-    if (steps >= 2000) throw new Error("备份仍在处理中，已保存进度，可在列表中继续。");
     const next = await advance(current.id);
     if (next.id !== initial.id) throw new Error("备份响应与当前任务不一致，已停止处理，请刷新列表核对。");
+    if (next.totalAssets !== initial.totalAssets || !Number.isSafeInteger(next.processedAssets)
+        || next.processedAssets < current.processedAssets || next.processedAssets > initial.totalAssets) throw new Error("备份进度异常，请刷新核对。");
     unchanged = next.status === "pending" && next.processedAssets <= current.processedAssets ? unchanged + 1 : 0;
     current = next;
     onProgress(current);
     if (unchanged >= 3) throw new Error("备份进度暂未推进，已停止等待，可稍后从列表继续。");
-    steps += 1;
   }
   if (current.status !== "complete") throw new Error(current.error || "备份未完成，请查看记录后重试。");
   return current;
+}
+
+export async function completeRestore(
+  resumeId: string | undefined,
+  request: (beforeId?: string) => Promise<Record<string, unknown>>,
+  prepare: (backup: ArchiveSummary) => Promise<void>,
+  remember: (id: string) => void,
+  onProgress: (processed: number, total: number) => void,
+  signal: AbortSignal,
+) {
+  let beforeId = resumeId;
+  let previous = -1;
+  let totalAssets: number | undefined;
+  let stalled = 0;
+  let prepared = false;
+  while (true) {
+    signal.throwIfAborted();
+    const reply = await request(beforeId);
+    if (typeof reply.preRestoreBackupId !== "string" || !reply.preRestoreBackupId || (beforeId && reply.preRestoreBackupId !== beforeId)) {
+      throw new Error("恢复前备份编号与当前操作不一致，请重新预览。");
+    }
+    if (!beforeId) remember(reply.preRestoreBackupId);
+    beforeId = reply.preRestoreBackupId;
+    if (reply.needsPreparation === true) {
+      const backup = archiveFromPayload(reply);
+      if (prepared || backup.id !== beforeId) throw new Error("未确认恢复前备份，请重新预览。");
+      await prepare(backup);
+      prepared = true;
+    } else if (reply.needsMore === true) {
+      const processed = Number(reply.processedAssets);
+      const total = Number(reply.totalAssets);
+      if (!Number.isSafeInteger(processed) || !Number.isSafeInteger(total) || processed < 0 || processed < previous
+          || total <= processed || (totalAssets !== undefined && total !== totalAssets)) throw new Error("恢复进度异常，请重新预览。");
+      stalled = processed === previous ? stalled + 1 : 0;
+      if (stalled >= 3) throw new Error("恢复进度暂未推进，可重新预览后继续。");
+      previous = processed;
+      totalAssets = total;
+      onProgress(processed, total);
+    } else {
+      if (reply.ok !== true || !reply.restored) throw new Error("尚未确认恢复完成，请刷新核对。");
+      return;
+    }
+  }
 }
 
 export function archiveDownloadUrl(id: string, format: "zip" | "json" = "zip", part?: number): string {

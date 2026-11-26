@@ -3,17 +3,24 @@ import { decryptCredential, encryptCredential } from "./bangumi-account";
 import { backupUser, prepareNetdiskZip, readNetdiskZipBlock, getBackupSettings, listBackupArchives, withBackupLock, type BackupEnv } from "./backup-archive";
 import { isBackupComponentEnabledValue } from "./backup-providers";
 
-const folder = "/apps/备份/月下集备份";
+function backupFolder(appName = "备份") {
+  if (!appName.trim() || appName !== appName.trim() || appName === "." || appName === ".." ||
+      /[\\/:*?"<>|]/.test(appName) || Array.from(appName).some(c => c.charCodeAt(0) < 32)) {
+    throw new BaiduFailure("请将 BAIDU_BACKUP_APP_NAME 设置为注册应用的目录名");
+  }
+  return "/apps/" + appName + "/月下集备份";
+}
 const fileApi = "https://pan.baidu.com/rest/2.0/xpan/file";
 const locatorApi = "https://d.pcs.baidu.com/rest/2.0/pcs/file";
 const blockSize = 4 * 1024 * 1024;
 const interval = 5 * 86400000;
 
 type Credential = { appKey: string; secretKey: string; accessToken: string; refreshToken: string; expiresAt: number };
-type Job = { archive: string; date: string; prefix: string; size: number; hashes: string[]; count: number; uploadid?: string; missing?: number[]; failures?: number };
+type Job = { archive: string; date: string; prefix: string; size: number; hashes: string[]; count: number; uploadid?: string; missing?: number[]; folder?: string; failures?: number };
 type Metadata = { expiresAt: number; nextDue?: number; completed?: string; file?: { path: string; size: number; id: string }; job?: Job; error?: string; retryAt?: number };
 type Row = { token_ciphertext: string; metadata: string };
-type Reply = { errno?: number; error_code?: number; path?: string; size?: number; fs_id?: number; uploadid?: string; block_list?: number[]; return_type?: number; md5?: string };
+type RemoteFile = { path?: string; size?: number | string; fs_id?: number | string; isdir?: number };
+type Reply = RemoteFile & { errno?: number; error_code?: number; info?: RemoteFile; list?: RemoteFile[]; uploadid?: string; block_list?: number[]; return_type?: number; md5?: string };
 class BaiduFailure extends Error {
   constructor(stage: string, readonly code?: number) { super(stage + (code === undefined ? "" : "（" + code + "）")); }
 }
@@ -24,10 +31,15 @@ function apiUrl(base: string, values: Record<string, string>) {
   return url;
 }
 
-async function call(url: URL, stage: string, body: FormData | URLSearchParams): Promise<Reply> {
+async function call(url: URL, stage: string, body?: FormData | URLSearchParams): Promise<Reply> {
   try {
-    const response = await fetch(url, { method: "POST", body, redirect: "manual", signal: AbortSignal.timeout(30000) });
-    const data: Reply = await response.json().catch(() => { throw new BaiduFailure(stage + "：非 JSON 响应", response.status); });
+    const response = await fetch(url, { method: body ? "POST" : "GET", body, redirect: "manual", signal: AbortSignal.timeout(30000) });
+    let data: Reply;
+    try {
+      // Keep 64-bit Netdisk IDs exact when Baidu sends an unquoted JSON integer.
+      data = JSON.parse(await response.text(), (key, value, context?: { source?: string }) =>
+        key === "fs_id" && typeof value === "number" ? context?.source ?? value : value);
+    } catch { throw new BaiduFailure(stage + "：非 JSON 响应", response.status); }
     const code = data.errno ?? data.error_code;
     if (!response.ok || (code !== undefined && code !== 0)) throw new BaiduFailure(stage, code ?? response.status);
     return data;
@@ -47,7 +59,7 @@ async function refresh(old: Credential): Promise<Credential> {
   return { ...old, accessToken: value.access_token, refreshToken: value.refresh_token, expiresAt: Date.now() + Number(value.expires_in) * 1000 };
 }
 
-async function ensureFolder(token: string) {
+async function ensureFolder(token: string, folder: string) {
   try {
     const result = await call(apiUrl(fileApi, { method: "create", access_token: token }), "创建月下集备份目录失败",
       new URLSearchParams({ path: folder, size: "0", isdir: "1", rtype: "0", block_list: "[]" }));
@@ -74,12 +86,29 @@ async function uploadHosts(token: string, path: string, uploadid: string) {
   return [...new Set([...hosts.slice(0, 2), fallback])];
 }
 
-function confirmed(result: Reply, path: string, size: number) {
-  if (!result.fs_id || result.path !== path || Number(result.size) !== size) throw new BaiduFailure("百度未确认 ZIP 路径和大小");
-  return { path, size, id: String(result.fs_id) };
+function remoteId(id: RemoteFile["fs_id"]) {
+  if (typeof id === "string" && /^[1-9]\d*$/.test(id)) return id;
+  return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? String(id) : undefined;
 }
 
-async function advanceZip(bucket: R2Bucket, token: string, user: string, job: Job) {
+async function confirmed(result: Reply, path: string, size: number, token: string) {
+  const failure = () => new BaiduFailure("百度未确认 ZIP 路径和大小");
+  const rows = [result, ...(result.info ? [result.info] : [])];
+  const ids = new Set(rows.map(row => remoteId(row.fs_id)).filter(id => id !== undefined));
+  if (ids.size > 1 || rows.some(row => (row.path !== undefined && row.path !== path)
+      || (row.size !== undefined && Number(row.size) !== size) || Number(row.isdir) === 1)) throw failure();
+  const [id] = ids;
+  if (id && rows.some(row => row.path === path) && rows.some(row => Number(row.size) === size)) return { path, size, id };
+
+  const lookup = await call(apiUrl(fileApi, { method: "search", access_token: token,
+    dir: path.slice(0, path.lastIndexOf("/")), key: path.slice(path.lastIndexOf("/") + 1), recursion: "0" }), "查询百度备份文件失败");
+  const matches = lookup.list?.filter(row => row.path === path && Number(row.size) === size && Number(row.isdir) !== 1);
+  const found = matches?.length === 1 ? remoteId(matches[0].fs_id) : undefined;
+  if (!found || (id && id !== found)) throw failure();
+  return { path, size, id: found };
+}
+
+async function advanceZip(bucket: R2Bucket, token: string, user: string, job: Job, folder: string) {
   const path = folder + "/月下集-" + job.date + ".zip";
   const file = (method: string) => apiUrl(fileApi, { method, access_token: token });
   if (job.hashes.length < job.count) {
@@ -93,9 +122,9 @@ async function advanceZip(bucket: R2Bucket, token: string, user: string, job: Jo
   }
   const fields = { path, size: String(job.size), isdir: "0", block_list: JSON.stringify(job.hashes), rtype: "3" };
   if (!job.uploadid) {
-    await ensureFolder(token);
+    await ensureFolder(token, folder);
     const pre = await call(file("precreate"), "百度预上传失败", new URLSearchParams({ ...fields, autoinit: "1" }));
-    if (pre.return_type === 2) return confirmed(pre, path, job.size);
+    if (pre.return_type === 2) return confirmed(pre, path, job.size, token);
     if (!pre.uploadid || !Array.isArray(pre.block_list) || pre.block_list.some(n => !Number.isInteger(n) || n < 0 || n >= job.count)) throw new BaiduFailure("百度预上传响应缺少分片信息");
     job.uploadid = pre.uploadid;
     job.missing = [...new Set(pre.block_list)];
@@ -121,7 +150,7 @@ async function advanceZip(bucket: R2Bucket, token: string, user: string, job: Jo
     return;
   }
   const result = await call(file("create"), "百度合并 ZIP 失败", new URLSearchParams({ ...fields, uploadid: job.uploadid }));
-  return confirmed(result, path, job.size);
+  return confirmed(result, path, job.size, token);
 }
 
 async function clearStaging(bucket: R2Bucket, job: Job) {
@@ -171,7 +200,15 @@ export async function runBaiduBackup(env: BackupEnv, now = Date.now()) {
         await save(await encryptCredential(JSON.stringify(credential)));
       }
       const job = m.job;
-      const file = await advanceZip(env.BUCKET, credential.accessToken, user, job);
+      const folder = backupFolder(env.BAIDU_BACKUP_APP_NAME);
+      if ((job.folder ?? backupFolder()) !== folder) {
+        // Upload IDs are scoped to a destination path. The staged ZIP blocks are reusable.
+        delete job.uploadid;
+        delete job.missing;
+        delete job.failures;
+      }
+      job.folder = folder;
+      const file = await advanceZip(env.BUCKET, credential.accessToken, user, job, folder);
       delete job.failures;
       if (file) {
         m.file = file;

@@ -267,3 +267,5 @@ npx wrangler deploy --config wrangler.jsonc
 ## 2026-11-24 备份完善
 
 当前备份代码地图与使用边界见 [BACKUPS.md](BACKUPS.md)。新增 `site-backup-data.ts` 的白名单数据快照、事务恢复与并发检查；`backup-archive.ts` 的私有 R2 历史、图片校验、有限重试与保留策略；`backup-zip.ts` 的流式 ZIP 和浏览器离线验包。`worker/index.ts` 增加 scheduled，根配置每五分钟唤醒，业务规则每天北京时间 04:00 生成一份。未迁移表结构。头像/背景改为不可变版本对象并保留旧路径兼容。备份接口保持浏览器 Session/CSRF，不授予内容插件或 Agent 额外备份权限。
+
+恢复后的封面查重使用迁移 `0028_restored_cover_hashes.sql`。完整备份携带当前封面对应的原上传哈希，旧清单可利用留存的同用户回执。百度单 ZIP 支持 ZIP64，秒传缺少元数据时按完整路径和大小回查。恢复面板在同一标签页按备份和预览指纹续跑。兼容旧标签与大文件的验收见 `tests/site-backup-data.test.mjs`、`tests/backup-zip.test.ts` 和 `tests/backup-archive.test.mjs`。

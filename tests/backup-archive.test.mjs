@@ -465,6 +465,21 @@ test("Baidu OAuth uses the official endpoint, session-bound one-use state, and e
   assert.match((await api("/api/backup/providers")).body.providers[0].backupStatus, /已保存/);
   const early = await api("/__test/baidu-copy", { now: clock + 4 * 86400000 });
   assert.deepEqual(early.body.calls, []);
+  for (const rapid of ["nested", "lookup", "wrong-size"]) {
+    await sql([{ sql: "UPDATE external_service_credentials SET metadata=? WHERE provider='baidu'", params: [JSON.stringify(metadata)] }]);
+    const response = await api("/__test/baidu-copy", { now: clock, rapid, appName: "月下集测试" });
+    assert.deepEqual(response.body.calls, rapid === "nested" ? ["mkdir", "precreate"] : ["mkdir", "precreate", "search"]);
+    const [stored] = await sql(["SELECT metadata FROM external_service_credentials WHERE provider='baidu'"]);
+    const outcome = JSON.parse(stored.results[0].metadata);
+    if (rapid === "wrong-size") {
+      assert.equal(outcome.file, undefined);
+      assert.match(outcome.error, /未确认/);
+    } else {
+      assert.equal(outcome.file.path, firstCopy.body.path.replace("/apps/备份/", "/apps/月下集测试/"));
+      assert.equal(outcome.file.size, uploaded.size);
+      assert.equal(outcome.file.id, "123456789012345678");
+    }
+  }
   const replay = await request(path + "?state=" + state + "&code=fixtureCode", { redirect: "manual" });
   assert.match(replay.headers.get("location"), /baidu=invalid/);
   const renewed = await api(path, { reuse: true });
@@ -475,4 +490,63 @@ test("Baidu OAuth uses the official endpoint, session-bound one-use state, and e
   const late = await request(path + "?state=" + renewedState + "&code=fixtureCode", { redirect: "manual" });
   assert.match(late.headers.get("location"), /baidu=invalid/);
   assert.equal((await api("/api/backup/providers")).body.providers[0].configured, false);
+});
+
+test("uploading the original cover after ZIP import skips the write even without historical receipts", async () => {
+  await sql(["DELETE FROM agent_operations", { sql: "INSERT INTO user_subjects (id,user_key,type,title,updated_at) VALUES (30,?,'music','音乐',1)", params: [owner] }]);
+  const send = key => api("/__test/cover-upload", { input: [...images[0]], key });
+  const first = await send("cover-before-restore");
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const backup = await createComplete();
+  const { manifest } = await download(backup.id);
+  assert.deepEqual(manifest.coverHashes, [{ image: first.body.image, sourceHash: sha256(images[0]) }]);
+  await sql(["DELETE FROM agent_operations"]);
+  const uploaded = await api("/api/backup/archive", { action: "upload-start", manifest });
+  assert.equal(uploaded.status, 200, JSON.stringify(uploaded.body));
+  const id = uploaded.body.backup.id;
+  assert.equal((await api("/api/backup/archive", { action: "upload-finish", id })).status, 200);
+  await restore(id);
+  const current = (await data()).data.tables.user_subjects.find(row => row.id === 30).image;
+  assert.notEqual(current, first.body.image);
+  const keys = () => api("/__test/objects?prefix=media-assets/");
+  const before = (await keys()).body.keys;
+  const again = await send("cover-after-restore");
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.equal(again.body.skipped, true);
+  assert.equal(again.body.image, current);
+  assert.deepEqual((await keys()).body.keys, before);
+});
+
+test("an older manifest can reuse local receipts and resume the same pending safety snapshot", async () => {
+  await sql(["DELETE FROM agent_operations", { sql: "INSERT INTO user_subjects (id,user_key,type,title,updated_at) VALUES (30,?,'music','音乐',1)", params: [owner] }]);
+  const send = key => api("/__test/cover-upload", { input: [...images[0]], key });
+  const first = await send("legacy-cover-original");
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const backup = await createComplete();
+  const { manifest } = await download(backup.id);
+  delete manifest.coverHashes;
+  const uploaded = await api("/api/backup/archive", { action: "upload-start", manifest });
+  const id = uploaded.body.backup.id;
+  assert.equal((await api("/api/backup/archive", { action: "upload-finish", id })).status, 200);
+  const preview = await api("/api/backup/archive", { action: "preview", id });
+  const request = { action: "restore", confirmed: true, expectedFingerprint: preview.body.expectedFingerprint, id };
+  const start = await api("/api/backup/archive", request);
+  assert.equal(start.body.backup.status, "pending");
+  request.preRestoreBackupId = start.body.preRestoreBackupId;
+  const repeat = await api("/api/backup/archive", request);
+  assert.equal(repeat.status, 202, JSON.stringify(repeat.body));
+  assert.equal(repeat.body.backup.id, request.preRestoreBackupId);
+  assert.equal((await list()).backups.filter(row => row.kind === "before-restore").length, 1);
+  await complete(request.preRestoreBackupId);
+  let result = await api("/api/backup/archive", request);
+  while (result.status === 202 && result.body.needsMore) result = await api("/api/backup/archive", request);
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  const again = await send("legacy-cover-after-restore");
+  assert.equal(again.body.skipped, true);
+  assert.notEqual(again.body.image, first.body.image);
+  await sql(["UPDATE user_subjects SET image=NULL WHERE id=30"]);
+  const replaced = await send("legacy-cover-replaced");
+  assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+  assert.notEqual(replaced.body.skipped, true);
+  assert.notEqual(replaced.body.image, again.body.image);
 });

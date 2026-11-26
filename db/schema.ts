@@ -1,5 +1,15 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+/** Original upload hashes for restored display images, scoped by owner and immutable URL. */
+export const restoredCoverHashes = sqliteTable("restored_cover_hashes", {
+  userKey: text("user_key").notNull(),
+  image: text("image").notNull(),
+  sourceHash: text("source_hash").notNull(),
+}, table => [
+  primaryKey({ columns: [table.userKey, table.image, table.sourceHash] }),
+  index("restored_cover_hash_lookup").on(table.userKey, table.sourceHash),
+]);
 
 export const userState = sqliteTable("user_state", {
   userKey: text("user_key").primaryKey(),
